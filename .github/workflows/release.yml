@@ -97,6 +97,11 @@ jobs:
                       z.write(full, os.path.relpath(full, stage))
           PY
 
+      - name: Install NSIS (Windows installer)
+        if: matrix.family == 'windows'
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+
       - name: Package Windows installer (NSIS)
         if: matrix.family == 'windows'
         shell: bash
