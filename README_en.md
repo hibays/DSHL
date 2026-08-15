@@ -2,10 +2,11 @@
 
 # DSHL — DeepSeek Harness web launcher
 
-DSHL is a small, native launcher that boots the **DeepSeek Harness web UI**
-(`dsh web`) inside a browser, using [webui.me](https://webui.me) as the
-startup-UI wrapper. It checks the runtime, installs `@deepseek-ai/dsh` if
-needed, boots it on an ephemeral port, and routes the browser to it.
+DSHL is a small, native launcher written in **Rust** that boots the
+**DeepSeek Harness web UI** (`dsh web`) inside a browser, using
+[webui.me](https://webui.me) as the startup-UI wrapper. It checks the runtime,
+installs `@deepseek-ai/dsh` if needed, boots it on an ephemeral port, and
+routes the browser to it.
 
 Everything is configurable through **`dshl.toml`**, and the launcher is built
 on **dependency-free native async** (`std::future`) — no tokio, no async
@@ -13,6 +14,14 @@ runtime.
 
 ## Highlights
 
+- **Single-file portable binary** — written in Rust, ships as **one
+  platform-native executable**: no installer, no bundled runtime, no GUI
+  toolkit. Copy it anywhere (a USB stick works) and run; a `dshl.toml` next
+  to it (or in the platform config dir) keeps the setup portable too.
+- **Runs in the browser** — the launcher's own UI needs no desktop framework:
+  the startup page is served by an embedded local web server (webui.me) and
+  opens in your system browser or an embedded WebView. The only real
+  dependency on the machine is Node.js (which dsh itself needs anyway).
 - **webui.me wrapper** — a lightweight startup page (progress, logs, config)
   that navigates to dsh once it is up (the window is kept and can be brought
   back at any time via the tray icon).
@@ -130,7 +139,7 @@ single-instance = false   # true = refuse to start dsh while another dsh is runn
 
 [ui]
 mode    = "webview"   # webview | browser (a *preference*, always falls back)
-close-to-tray = false # true = close the window fully into the tray (dsh keeps running); tray icon rebuilds it; Windows/Linux
+close-to-tray = false # true = close the window fully into the tray (dsh keeps running); tray icon rebuilds it; Windows/Linux/macOS
 single-instance = false # true = only one dshl instance; a second one activates the existing one (focus or restore)
 ```
 
@@ -196,9 +205,15 @@ dsh keeps running in the background:
   (libayatana-appindicator3, loaded at runtime; without the library the
   feature degrades to close-to-exit) offers **Restore window** (rebuilds and
   re-navigates to dsh) and **Quit**.
+- **macOS** — same model as Linux: after the WKWebView window closes the
+  launcher keeps running without a window; a menu-bar status item
+  (`tray-icon`'s AppKit backend, created on the main thread) offers
+  **Restore window** and **Quit**. The icon is an **NSImage template**
+  (black + alpha mask), so macOS renders it in the menu-bar colour in both
+  light and dark mode automatically — no icon swapping needed; a single
+  left click restores the window, right click opens the menu.
 
-Closing the window during startup (dsh not ready yet) still exits directly;
-macOS has no tray support yet.
+Closing the window during startup (dsh not ready yet) still exits directly.
 
 ### Single-instance for dshl (optional)
 
@@ -262,24 +277,89 @@ src/
   runtime.rs     minimal native-async executor (no tokio)
   config.rs      dshl.toml model + discovery
   mirror.rs      mirror resolution (temporary, never persisted)
-  platform.rs    OS/arch/shell/paths/process helpers + dark mode / window theme
-                + system tray (Windows/Linux), dshl single-instance mutex,
-                screen-size & DPI probing
+  platform/      OS primitives (loosely coupled — see Architecture below)
+    mod.rs       facade: re-exports the submodules; callers still write crate::platform::…
+    detect.rs    OS/arch/shell detection
+    paths.rs     directory discovery + executable lookup (which/tool/known_tool_dirs)
+    actions.rs   OS actions (open a file in the file manager)
+    process.rs   process liveness / tree-kill / process discovery
+    dpi.rs       DPI awareness & scaling (Win32 + X11 dlopen)
+    theme.rs     dark-mode detection + window theming (Win32)
+    window.rs    Win32 window geometry / focus / discovery
+    single_instance.rs  dshl single-instance mutex (lock file + activation signal)
+  tray/          system tray (one implementation per OS, shared 6-function interface)
+    windows.rs   hidden message window + Shell_NotifyIconW (all via windows-rs)
+    linux.rs     libayatana-appindicator3 loaded at runtime via dlopen (no hard dep)
+    macos.rs     tray-icon (AppKit backend, NSImage template icon)
   version.rs     semver parse/compare
-  process.rs     async child (streaming) + hidden-console spawn + job object
+  process/       process helpers (loosely coupled)
+    mod.rs       facade: re-exports (run / with_env / AsyncChild / Output / …)
+    capture.rs   synchronous capture (run) + command prep (with_env / prepare_spawn)
+    child.rs     AsyncChild: streaming line queue + reaper thread + waker + graceful stop
+    win_proc.rs  (Windows) CreateProcessW hidden console + Ctrl+C graceful stop (windows-rs)
+    win_job.rs   (Windows) kill-on-close Job Object (windows-rs)
   wskeep.rs      keep-alive WebSocket (keeps the WebView window open)
   probe.rs       tool detection (node/bun/fnm/cargo/nvm/dsh)
-  install.rs     installers + the fallback chain
+  install/       runtime installers + fallback chains (one file per runtime)
+    mod.rs       facade: constants (NODE_MIN/BUN_MIN/…) + re-exports
+    node.rs      ensure_node + fnm→cargo→nvm→fnm auto-install fallback chain
+    bun.rs       ensure_bun + direct-download→official-script→npm fallback chain
+    pnpm.rs      ensure_pnpm + global-bin-dir resolution
+    download.rs  zip download/extract + fnm binary download + github proxy prefix
+    stream.rs    run_streaming (stream command output into the progress log)
+    runtime.rs   Runtime model (PATH prefix)
   progress.rs    shared status state (UI-agnostic)
   flow/          the five startup flows
-  ui/            webui.me window, vfs, bindings
+  ui/            webui.me startup window (split by responsibility — see Architecture)
+    mod.rs       facade: setup / launch_flow / run_loop / request_shutdown
+    state.rs     all shared atomic state (modules coordinate only through it)
+    vfs.rs       virtual file handler (embedded startup page)
+    bindings.rs  functions bound to the page (get_state / retry / force_kill_stale / …)
+    window.rs    window lifecycle: create/close/geometry persistence/theme/handle tracking/tray restore
+    launch.rs    launch flow: stale cleanup → config → flow::run → navigate → supervise
+    supervisor.rs main event loop + window-gone detection + tray/single-instance requests
 assets/          startup page (index.html / app.js / styles.css)
                + full-resolution icon sources (dsh-black.svg / dsh-white.svg)
 packing/       platform-specific installers + generated raster icons
   windows/       dshl.nsi + dsh.ico / dsh-white.ico
   linux/         build-deb.sh + 256/512px dsh*.png
   macos/         build-dmg.sh + 1024px dsh*.png (.icns built at package time)
+               + tray-black.rgba (32×32 menu-bar template icon, raw RGBA)
 ```
+
+### Architecture (loose coupling)
+
+- **`platform/` does OS primitives only** — detection, paths, processes, DPI,
+  theme, window helpers, single-instance mutex. One concern per submodule,
+  `mod.rs` is a thin facade (re-exports), so every `crate::platform::…` call
+  site stayed unchanged.
+- **All Windows APIs go through `windows-rs 0.62`** (the `windows` crate) —
+  no hand-written `#[link] extern "system"` FFI blocks remain. Features are
+  enabled per module (`Win32_UI_WindowsAndMessaging`, `Win32_UI_HiDpi`,
+  `Win32_UI_Shell`, `Win32_Graphics_Dwm`, `Win32_System_Registry`,
+  `Win32_System_Threading`, …).
+- **`tray/` is decoupled from the UI** — the three platform implementations
+  share one 6-function interface (`start` / `hide_to_tray` /
+  `quit_requested` / `restore_requested` / `set_icon` / `shutdown`); events
+  surface as atomic flags that `ui/supervisor.rs` polls, with no platform
+  details leaking in. On macOS, AppKit requires the status item to be created
+  on the main thread, so `start()` only records intent and the icon is built
+  on the next main-thread poll (see the design notes at the top of
+  `tray/macos.rs`).
+- **`ui/` is split by responsibility** — all shared state lives in
+  `state.rs` (modules never reach into each other's privates), `window.rs`
+  owns the window itself, `launch.rs` the launch flow, `supervisor.rs` the
+  event loop, `bindings.rs` is the page's only entry point, and `mod.rs` is
+  a re-export facade.
+- **`process/` is split by responsibility** — `capture.rs` for synchronous
+  capture and command prep, `child.rs` for `AsyncChild`'s streaming line
+  queue and graceful stop, and the Windows-only hidden-console spawn/Ctrl+C
+  (`win_proc.rs`) and kill-on-close Job Object (`win_job.rs`) live in their
+  own files; `mod.rs` re-exports the public API unchanged.
+- **`install/` is split by runtime** — one file per installer (node / bun /
+  pnpm), shared zip download, fnm binary download and github-proxy prefix in
+  `download.rs`, `Runtime` model and `run_streaming` each standalone,
+  `mod.rs` re-exports the public API unchanged.
 
 ## Icons
 
@@ -310,6 +390,10 @@ ffmpeg -hide_banner -y -i assets/dsh-black.svg -vf "scale=256:256:flags=lanczos"
 ffmpeg -hide_banner -y -i assets/dsh-black.svg -vf "scale=512:512:flags=lanczos" -frames:v 1 packing/linux/dsh-512.png
 ffmpeg -hide_banner -y -i assets/dsh-black.svg -frames:v 1 packing/macos/dsh.png
 # white variant: input assets/dsh-white.svg → dsh-white*.png outputs
+
+# macOS menu-bar template icon (32×32 raw RGBA, embedded at compile time;
+# black + alpha mask — the system renders it in the menu-bar colour):
+ffmpeg -hide_banner -y -i assets/dsh-black.svg -pix_fmt rgba -f rawvideo -s 32x32 packing/macos/tray-black.rgba
 ```
 
 ## License

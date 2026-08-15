@@ -1,0 +1,92 @@
+//! Functions bound to the startup page (webui `bind`).
+//!
+//! These are the frontend's only entry points into the launcher; they read
+//! shared state ([`super::state`]), drive the launch flow
+//! ([`super::launch`]) and surface progress via [`crate::progress`].
+
+use webui::webui;
+
+use super::launch::launch_flow;
+use super::state;
+use crate::config;
+use crate::progress;
+
+fn get_state(e: webui::Event) {
+    e.return_string(&progress::to_json());
+}
+
+fn exit_app(_e: webui::Event) {
+    state::SHOULD_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
+    webui::exit();
+}
+
+fn retry(_e: webui::Event) {
+    let stale = state::STALE_PID.load(std::sync::atomic::Ordering::SeqCst);
+    if stale != 0 && crate::platform::process_alive(stale) {
+        progress::set_error(format!(
+            "残留的 dsh 进程 (pid {stale}) 仍在运行。请点击「强制结束残留进程」结束它，或手动结束后再点重试。"
+        ));
+        return;
+    }
+    if stale != 0 {
+        state::STALE_PID.store(0, std::sync::atomic::Ordering::SeqCst);
+        progress::set_stale_pid(None);
+    }
+    launch_flow();
+}
+
+/// Force-kill the stale dsh — only runs after the user clicks the dedicated
+/// button on the startup page (explicit confirmation). The kill itself is
+/// async so the webui thread is not blocked; on success the launch retries.
+fn force_kill_stale(_e: webui::Event) {
+    let pid = state::STALE_PID.load(std::sync::atomic::Ordering::SeqCst);
+    if pid == 0 {
+        return;
+    }
+    std::thread::spawn(move || {
+        crate::debug::emit(&format!(
+            "user confirmed force-kill of stale dsh (pid {pid})"
+        ));
+        crate::platform::kill_tree(pid);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            if !crate::platform::process_alive(pid) || std::time::Instant::now() >= deadline {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        if crate::platform::process_alive(pid) {
+            progress::set_error(format!(
+                "强制结束失败：pid {pid} 仍然存活，请手动结束该进程。"
+            ));
+            return;
+        }
+        state::STALE_PID.store(0, std::sync::atomic::Ordering::SeqCst);
+        progress::set_stale_pid(None);
+        progress::log(format!(
+            "残留的 dsh 进程 (pid {pid}) 已被强制结束，重新启动…"
+        ));
+        launch_flow();
+    });
+}
+
+fn open_config(_e: webui::Event) {
+    let path = state::CONFIG_PATH
+        .lock()
+        .unwrap()
+        .clone()
+        .unwrap_or_else(config::default_config_path);
+    if !path.exists() {
+        let _ = config::write_template(&path);
+    }
+    let _ = crate::platform::open_path(&path);
+}
+
+/// Register all frontend bindings on a fresh window.
+pub(crate) fn register(window: &webui::Window) {
+    window.bind("get_state", get_state);
+    window.bind("exit_app", exit_app);
+    window.bind("retry", retry);
+    window.bind("force_kill_stale", force_kill_stale);
+    window.bind("open_config", open_config);
+}

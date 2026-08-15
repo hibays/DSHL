@@ -8,8 +8,14 @@
 //! white "night" variant loaded from memory at runtime on dark themes.
 
 fn main() {
-    #[cfg(windows)]
-    {
+    // Build scripts compile for the HOST with a special cfg set (test,
+    // debug_assertions, the host's `target_family` and `host`) — `target_os`
+    // is NOT set there, so `#[cfg(windows)]` sees the host (and would run the
+    // winres step while cross-checking macOS/Linux targets), while
+    // `#[cfg(target_os = "windows")]` would be false on EVERY host (and the
+    // .exe icon resource would silently vanish). The only reliable way to
+    // gate on the actual TARGET is the `CARGO_CFG_TARGET_OS` env var.
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("windows") {
         let mut res = winres::WindowsResource::new();
         // User-visible product metadata on the .exe (Explorer properties,
         // taskbar tooltips, Details-tab description, Win10 process list).

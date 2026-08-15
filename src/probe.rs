@@ -103,7 +103,7 @@ pub fn dsh_in(extra_dirs: &[PathBuf]) -> Tool {
 /// nvm needs special handling: it is a shell function on Unix and a binary
 /// (nvm-windows) on Windows.
 pub fn nvm() -> Tool {
-    if cfg!(windows) {
+    if cfg!(target_os = "windows") {
         let Some(path) = platform::which("nvm") else {
             return Tool::missing("nvm");
         };

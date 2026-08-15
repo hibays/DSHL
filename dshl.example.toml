@@ -49,12 +49,11 @@ single-instance = false
 #   webview = prefer embedded WebView, then external browser (default)
 #   browser = prefer external browser, then embedded WebView
 mode = "webview"
-# Close to the system tray instead of exiting (Windows only).
+# Close to the system tray instead of exiting (Windows / Linux / macOS).
 #   false (default) = closing the window exits the launcher and stops dsh
 #   true            = closing hides to tray, dsh keeps running in the
 #                     background; restore from the tray icon, quit via its
-#                     menu (or Ctrl+C in a console build). Ignored on
-#                     platforms without tray support.
+#                     menu (or Ctrl+C in a console build).
 close-to-tray = false
 # Only allow one dshl instance on this machine (launcher-level mutex,
 # separate from the [dsh] single-instance option which guards dsh).

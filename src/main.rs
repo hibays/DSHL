@@ -1,8 +1,7 @@
 //! DSHL binary entry point.
 
-// Release builds are GUI apps on Windows (no console window); debug builds
-// keep the console so `cargo r` can show the `--debug` runtime log.
-#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+// Prevents additional console window on Windows in release, DO NOT REMOVE!!
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use std::path::PathBuf;
 
@@ -82,7 +81,11 @@ fn main() {
     // another dshl is already running, don't start a second window/instance —
     // activate the existing one (restore from tray or focus its window) and
     // exit. Distinct from [dsh] single-instance, which guards dsh itself.
-    if config::load(cli.config.as_deref()).config.ui.single_instance {
+    if config::load(cli.config.as_deref())
+        .config
+        .ui
+        .single_instance
+    {
         if let Some(lock) = dshl::platform::single_instance::acquire() {
             // First instance: the lock file handle must stay open for the
             // whole process lifetime or the kernel releases the lock. We

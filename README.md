@@ -11,6 +11,12 @@ DSHL 是一个轻量的原生启动器，以 [webui.me](https://webui.me) 作为
 
 ## 亮点
 
+- **Rust 编写 · 单文件便携** — 原生编译为**一个平台可执行文件**：无安装器、
+  无捆绑运行时、无 GUI 框架。拷到哪都能跑（U 盘也行），`dshl.toml` 放在可执行
+  文件旁（或平台配置目录）即可随身携带配置。
+- **只需要浏览器** — 启动器自己的界面不依赖任何桌面框架：启动页由内嵌的本地
+  web 服务器（webui.me）提供，用系统浏览器或内嵌 WebView 打开；机器上唯一
+  的硬依赖是 Node.js（而 dsh 本身就需要它）。
 - **webui.me 包装** — 轻量启动页（进度、日志、配置），dsh 启动后导航到 dsh（窗口保留，配合托盘可随时唤回）。
 - **五个明确的启动流程**：
   1. 检查系统环境与架构
@@ -113,7 +119,7 @@ single-instance = false   # true = 检测到其他 dsh 实例在运行时拒绝�
 
 [ui]
 mode    = "webview"   # webview | browser（是*偏好*，始终会回退）
-close-to-tray = false # true = 关闭窗口时彻底关窗进托盘（dsh 后台运行），托盘图标重建窗口；Windows/Linux
+close-to-tray = false # true = 关闭窗口时彻底关窗进托盘（dsh 后台运行），托盘图标重建窗口；Windows/Linux/macOS
 single-instance = false # true = 只允许一个 dshl 实例；第二个实例改为激活已有实例（聚焦或唤出）
 ```
 
@@ -167,8 +173,12 @@ dsh 已启动时关闭窗口不再退出，dsh 继续在后台运行：
   托盘图标（libayatana-appindicator3，运行时动态加载；桌面没有该库时
   自动降级为关闭即退出）提供「恢复窗口」（重建窗口并重新导航到 dsh）和
   「退出」。
+- **macOS**：与 Linux 相同，WKWebView 窗口关闭后启动器无窗口继续运行，
+  状态栏图标（`tray-icon` 的 AppKit 后端，主线程创建）提供「恢复窗口」和
+  「退出」。图标使用 **NSImage 模板**（黑色 + alpha 遮罩），系统自动按菜单栏
+  深浅色渲染，无需手动切换图标变体；左键单击直接恢复窗口，右键弹出菜单。
 
-启动阶段（dsh 尚未就绪）关闭窗口仍然直接退出；macOS 暂不支持托盘。
+启动阶段（dsh 尚未就绪）关闭窗口仍然直接退出。
 
 ### 单实例（dshl 互斥，可选）
 
@@ -219,23 +229,82 @@ src/
   runtime.rs     极简原生 async 执行器（无 tokio）
   config.rs      dshl.toml 模型 + 发现
   mirror.rs      镜像解析（临时，从不持久化）
-  platform.rs    OS/架构/shell/路径/进程助手 + 深色模式/窗口主题
-                + 系统托盘（Windows/Linux）、dshl 单实例互斥、屏幕尺寸与 DPI 探测
+  platform/      OS 原语（松耦合拆分，见下方「架构说明」）
+    mod.rs       门面：re-export 各子模块，调用方仍写 crate::platform::…
+    detect.rs    OS/架构/shell 探测
+    paths.rs     目录发现 + 可执行文件查找（which/tool/known_tool_dirs）
+    actions.rs   OS 动作（文件管理器打开文件）
+    process.rs   进程存活/树杀/进程发现
+    dpi.rs       DPI 感知与缩放（Win32 + X11 dlopen）
+    theme.rs     深色模式检测 + 窗口主题（Win32）
+    window.rs    Win32 窗口几何/聚焦/发现
+    single_instance.rs  dshl 单实例互斥（锁文件 + 激活信号）
+  tray/          系统托盘（每个平台一个实现，共用 6 函数接口）
+    windows.rs   隐藏消息窗口 + Shell_NotifyIconW（全部走 windows-rs）
+    linux.rs     libayatana-appindicator3 运行时 dlopen（无硬依赖）
+    macos.rs     tray-icon（AppKit 后端，NSImage 模板图标）
   version.rs     语义化版本解析/比较
-  process.rs     async 子进程（流式）+ 隐藏控制台启动 + job object
+  process/       进程助手（松耦合拆分）
+    mod.rs       门面：re-export（run / with_env / AsyncChild / Output …）
+    capture.rs   同步捕获（run）+ 命令准备（with_env / prepare_spawn）
+    child.rs     AsyncChild：流式行队列 + 收尸线程 + waker + 优雅停止
+    win_proc.rs  (Windows) CreateProcessW 隐藏控制台 + Ctrl+C 优雅停（windows-rs）
+    win_job.rs   (Windows) kill-on-close Job Object（windows-rs）
   wskeep.rs      保活 WebSocket（让 WebView 窗口保持打开）
   probe.rs       工具探测（node/bun/fnm/cargo/nvm/dsh）
-  install.rs     安装器 + 回退链
+  install/       运行时安装器 + 回退链（按运行时拆分）
+    mod.rs       门面：常量（NODE_MIN/BUN_MIN…）+ re-export
+    node.rs      ensure_node + fnm→cargo→nvm→fnm 自动安装 回退链
+    bun.rs       ensure_bun + 直连下载→官方脚本→npm 回退链
+    pnpm.rs      ensure_pnpm + 全局 bin 目录解析
+    download.rs  zip 下载/解压 + fnm 二进制下载 + github 代理前缀
+    stream.rs    run_streaming（命令输出流式进进度日志）
+    runtime.rs   Runtime 模型（PATH 前缀）
   progress.rs    共享状态（与 UI 解耦）
   flow/          五个启动流程
-  ui/            webui.me 窗口、vfs、绑定
+  ui/            webui.me 启动窗口（按职责拆分，见下方「架构说明」）
+    mod.rs       门面：setup / launch_flow / run_loop / request_shutdown
+    state.rs     全部共享原子状态（模块间只经它协调）
+    vfs.rs       虚拟文件处理器（内嵌启动页）
+    bindings.rs  页面绑定函数（get_state / retry / force_kill_stale …）
+    window.rs    窗口生命周期：创建/关闭/几何持久化/主题/句柄追踪/托盘恢复
+    launch.rs    启动流程：残留清理 → 配置 → flow::run → 导航 → 监督
+    supervisor.rs 主事件循环 + 窗口消失检测 + 托盘/单实例请求
 assets/          启动页（index.html / app.js / styles.css）
                 + 全分辨率图标源（dsh-black.svg / dsh-white.svg）
 packing/       平台特化安装包与生成的光栅图标（ffmpeg 产物）
   windows/       dshl.nsi + dsh.ico / dsh-white.ico
   linux/         build-deb.sh + 256/512px 的 dsh*.png
   macos/         build-dmg.sh + 1024px dsh*.png（打包时生成 .icns）
+                + tray-black.rgba（32×32 状态栏模板图标，原始 RGBA）
 ```
+
+### 架构说明（松耦合设计）
+
+- **`platform/` 只做 OS 原语**：检测、路径、进程、DPI、主题、窗口助手、单实例
+  互斥。每个子模块一个职责，`mod.rs` 是薄门面（re-export），因此其余代码的
+  `crate::platform::…` 调用完全不变。
+- **Windows API 全部走 `windows-rs 0.62`**（`windows` crate）：不再有任何手写
+  `#[link] extern "system"` FFI 块。需要哪个模块就开哪个 feature
+  （`Win32_UI_WindowsAndMessaging`、`Win32_UI_HiDpi`、`Win32_UI_Shell`、
+  `Win32_Graphics_Dwm`、`Win32_System_Registry`、`Win32_System_Threading` …）。
+- **`tray/` 与 UI 解耦**：三套平台实现共用同一个 6 函数接口（`start` /
+  `hide_to_tray` / `quit_requested` / `restore_requested` / `set_icon` /
+  `shutdown`），事件都以原子标志的形式暴露，`ui/supervisor.rs` 只轮询标志、
+  不感知平台细节。macOS 因 AppKit 必须主线程创建状态栏图标，`start()` 只记
+  意图，真正创建推迟到主线程轮询时（见 `tray/macos.rs` 顶部设计说明）。
+- **`ui/` 按职责拆分**：全部共享状态集中在 `state.rs`（模块间不互相摸内部），
+  `window.rs` 管窗口本身，`launch.rs` 管启动流程，`supervisor.rs` 管事件循环，
+  `bindings.rs` 是页面的唯一入口，`mod.rs` 只做 re-export 门面。
+- **`process/` 按职责拆分**：`capture.rs` 管同步捕获与命令准备，`child.rs` 管
+  `AsyncChild` 流式行队列与优雅停止，Windows 专属的隐藏控制台 spawn /
+  Ctrl+C（`win_proc.rs`）和 kill-on-close Job Object（`win_job.rs`）单独成文件，
+  `mod.rs` 只 re-export 公共 API，外部调用零改动。
+- **`install/` 按运行时拆分**：node / bun / pnpm 三个安装器各占一个文件，
+  公共的 zip 下载、fnm 二进制下载、github 代理前缀在 `download.rs`，
+  `Runtime` 模型与 `run_streaming` 各自独立，`mod.rs` 只 re-export 公共 API
+  （`ensure_node` / `ensure_bun` / `ensure_pnpm` / `Runtime` / `run_streaming`），
+  外部调用零改动。
 
 ## 图标
 
@@ -263,6 +332,10 @@ ffmpeg -hide_banner -y -i assets/dsh-black.svg -vf "scale=256:256:flags=lanczos"
 ffmpeg -hide_banner -y -i assets/dsh-black.svg -vf "scale=512:512:flags=lanczos" -frames:v 1 packing/linux/dsh-512.png
 ffmpeg -hide_banner -y -i assets/dsh-black.svg -frames:v 1 packing/macos/dsh.png
 # 白色变体把输入换为 assets/dsh-white.svg，输出 dsh-white*.png
+
+# macOS 状态栏模板图标（32×32 原始 RGBA，编译期嵌入；黑色 + alpha 遮罩，
+# 系统自动按菜单栏深浅色渲染）
+ffmpeg -hide_banner -y -i assets/dsh-black.svg -pix_fmt rgba -f rawvideo -s 32x32 packing/macos/tray-black.rgba
 ```
 
 ## License

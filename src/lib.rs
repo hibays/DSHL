@@ -9,6 +9,17 @@
 //!
 //! Everything is configurable through `dshl.toml`, and the launcher uses
 //! dependency-free native async (`std::future`) — no tokio.
+//!
+//! Module map (loosely coupled, one concern per module):
+//! - [`platform`]: OS primitives (detection, paths, processes, DPI, theme,
+//!   window helpers, single-instance lock) — split into submodules, Windows
+//!   APIs via windows-rs 0.62.
+//! - [`tray`]: the close-to-tray status icon, one implementation per OS
+//!   behind a 6-function interface.
+//! - [`ui`]: the window layer (assets, bindings, lifecycle, launch flow,
+//!   supervisor loop).
+//! - [`flow`]: the startup pipeline (prepare → install → launch).
+//! - everything else: config, mirror resolution, probes, progress, keep-alive.
 
 pub mod config;
 pub mod debug;
@@ -21,6 +32,7 @@ pub mod probe;
 pub mod process;
 pub mod progress;
 pub mod runtime;
+pub mod tray;
 pub mod ui;
 pub mod version;
 pub mod wskeep;
