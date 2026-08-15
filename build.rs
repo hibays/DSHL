@@ -48,4 +48,14 @@ fn main() {
     println!("cargo:rerun-if-changed=assets/dsh-white.svg");
     println!("cargo:rerun-if-changed=packing/windows/dsh.ico");
     println!("cargo:rerun-if-changed=packing/windows/dsh-white.ico");
+
+    // webui's macOS backend (wkwebview.m) uses WKWebView, but webui-rs's
+    // build.rs never emits `-framework WebKit` (it links nothing extra on
+    // macOS). Without it the link fails with undefined `_OBJC_CLASS_$_WKWebView`.
+    // Link flags from any build script in the graph are merged, so we add the
+    // framework here. Cocoa too — webui links both (see its CMakeLists).
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        println!("cargo:rustc-link-lib=framework=WebKit");
+        println!("cargo:rustc-link-lib=framework=Cocoa");
+    }
 }

@@ -1,14 +1,14 @@
 //! The webui virtual-file handler that serves the embedded startup page.
 
 use std::ffi::CStr;
-use std::os::raw::c_void;
+use std::os::raw::{c_char, c_void};
 
 use webui::webui;
 
 use super::assets;
 
 /// Serve the embedded startup assets from memory.
-pub(crate) unsafe extern "C" fn vfs(filename: *const i8, length: *mut i32) -> *const c_void {
+pub(crate) unsafe extern "C" fn vfs(filename: *const c_char, length: *mut i32) -> *const c_void {
     // SAFETY: webui passes a valid NUL-terminated path string.
     let name = unsafe { CStr::from_ptr(filename) }.to_str().unwrap_or("");
     let path = name.split('?').next().unwrap_or("");

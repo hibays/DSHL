@@ -13,7 +13,11 @@ categories = ["command-line-utilities", "web-programming"]
 # webui.me GUI wrapper (C library is fetched by its build script).
 # The upstream crate is named `webui-rs`; we rename it to `webui` so the code
 # reads `webui::webui` exactly as the requested dependency line intends.
-webui = { git = "https://github.com/webui-dev/rust-webui/", branch = "main", package = "webui-rs" }
+# We use our fork (hibays/rust-webui) which fixes two upstream build breaks:
+#   - aarch64-linux: FFI types hardcoded to i8 while c_char is u8 there;
+#   - macOS: build.rs never emits `-framework WebKit`, so WKWebView symbols
+#     are undefined at link time (the framework link is added in build.rs).
+webui = { git = "https://github.com/hibays/rust-webui/", branch = "main", package = "webui-rs" }
 # dshl.toml configuration
 serde = { version = "1", features = ["derive"] }
 toml = "0.8"
