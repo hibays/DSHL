@@ -1,0 +1,65 @@
+# dshl.toml — DeepSeek Harness Launcher configuration.
+# The launcher reloads this file on every start; every field is optional.
+
+# Mirror policy for domestic (CN) mirrors.
+#   off   = never use mirrors
+#   on    = use a mirror when its address is non-empty (default)
+#   force = always use mirrors, never fall back to the original source
+auto-mirror = "on"
+
+[mirrors]
+# npm registry (bun installs from npm too, so no separate bun package mirror).
+npm = "http://registry.npmmirror.com"
+# cargo sparse index (used temporarily for `cargo install fnm`).
+cargo = "sparse+https://rsproxy.cn/index/"
+# Base URL for downloading Node releases (fnm/nvm).
+nodejs-release = "https://mirrors.aliyun.com/nodejs-release/"
+# Base URL for downloading the bun runtime binary. Empty = use github
+# (through the `github` proxy prefix below when it is set).
+bun-download = ""
+# GitHub proxy prefix. Empty = use github directly.
+github = ""
+
+[dsh]
+# Flags forwarded to dsh (boot the web profile on an ephemeral port).
+flags = "--profile web --host 127.0.0.1 --port 0"
+# install = `bun add -g`/`npm i -g`/`pnpm add -g` then run `dsh`;
+# x       = run directly via npx / bunx / pnpx.
+mode = "install"
+# Package manager for install mode: npm / bun / pnpm.
+# pnpm is auto-installed via `npm i -g pnpm` when missing.
+pm = "npm"
+# Runner prefix for x mode: npx / bunx / pnpx.
+exector = "npx"
+# Version suffix for @deepseek-ai/dsh. "latest" = no suffix.
+version = "latest"
+# Keep @deepseek-ai/dsh up-to-date automatically.
+#   true  = check for a newer release and update (install), or fetch latest (x)
+#   false = use the installed / cached version, never update
+auto-update = true
+# Only allow one dsh instance on this machine.
+#   false (default) = every dshl process runs its own dsh (multi-instance)
+#   true            = refuse to start dsh when another dsh is already running
+#                     (started manually or by another dshl), to prevent two
+#                     processes writing the same session log
+single-instance = false
+
+[ui]
+# Preferred window backend (always falls back to the other if unavailable).
+#   webview = prefer embedded WebView, then external browser (default)
+#   browser = prefer external browser, then embedded WebView
+mode = "webview"
+# Close to the system tray instead of exiting (Windows only).
+#   false (default) = closing the window exits the launcher and stops dsh
+#   true            = closing hides to tray, dsh keeps running in the
+#                     background; restore from the tray icon, quit via its
+#                     menu (or Ctrl+C in a console build). Ignored on
+#                     platforms without tray support.
+close-to-tray = false
+# Only allow one dshl instance on this machine (launcher-level mutex,
+# separate from the [dsh] single-instance option which guards dsh).
+#   false (default) = every dshl process runs independently
+#   true            = a second dshl does not start; it activates the
+#                     existing instance instead (restore from tray if
+#                     hidden, or focus its window if visible)
+single-instance = false

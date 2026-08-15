@@ -1,0 +1,198 @@
+:root {
+  --bg: #0f1420;
+  --bg2: #171e30;
+  --panel: #1d2639;
+  --border: #2b3852;
+  --text: #e7ecf5;
+  --muted: #8b97ad;
+  --accent: #4f8cff;
+  --ok: #3ecf8e;
+  --warn: #f5b83d;
+  --err: #ff5c6c;
+  --mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
+}
+
+* { box-sizing: border-box; }
+
+html, body {
+  margin: 0;
+  height: 100%;
+  background: linear-gradient(160deg, var(--bg), var(--bg2));
+  color: var(--text);
+  font-family: "Segoe UI", system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+}
+
+.shell {
+  max-width: 900px;
+  margin: 0 auto;
+  padding: 20px 20px 90px;
+}
+
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 16px;
+}
+
+.brand { display: flex; align-items: center; gap: 12px; }
+.logo {
+  width: 52px; height: 52px;
+  border-radius: 14px;
+  padding: 9px;
+  /* Light card so the black whale mark stays visible on the dark shell. */
+  background: #f2f5fb;
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
+}
+/* The dsh-black.svg mark switches to white in dark mode (prefers-color-scheme),
+   so the card must go dark too or the whale would vanish. */
+@media (prefers-color-scheme: dark) {
+  .logo {
+    background: #1d2639;
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.55);
+  }
+}
+.brand h1 { margin: 0; font-size: 22px; letter-spacing: 1px; }
+.brand p { margin: 2px 0 0; color: var(--muted); font-size: 12px; }
+
+#status-badge {
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  font-size: 13px;
+  color: var(--accent);
+}
+
+.error {
+  background: rgba(255, 92, 108, 0.12);
+  border: 1px solid var(--err);
+  color: #ffd7db;
+  padding: 12px 16px;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  white-space: pre-wrap;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+main {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+}
+
+.card {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+}
+.card h2 {
+  margin: 0 0 12px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.6px;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.steps { list-style: none; margin: 0; padding: 0; }
+.steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--border);
+}
+.steps li:last-child { border-bottom: none; }
+
+.dot {
+  width: 12px; height: 12px;
+  border-radius: 50%;
+  background: var(--muted);
+  flex: none;
+}
+.dot.running { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1s infinite; }
+.dot.done { background: var(--ok); }
+.dot.error { background: var(--err); }
+.dot.skipped { background: var(--warn); }
+
+.step-body { flex: 1; min-width: 0; }
+.step-title { font-size: 13px; font-weight: 600; }
+.step-msg { font-size: 12px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@keyframes pulse { 50% { opacity: 0.4; } }
+
+.path { font-weight: 400; color: var(--muted); font-size: 11px; margin-left: 8px; }
+
+.config-error {
+  background: rgba(245, 184, 61, 0.12);
+  border: 1px solid var(--warn);
+  color: #ffe3a3;
+  padding: 10px 14px;
+  border-radius: 9px;
+  margin-bottom: 12px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 12px; font-size: 12px; }
+.kv .k { color: var(--muted); }
+.kv .v { font-family: var(--mono); color: var(--accent); word-break: break-all; }
+
+.log-card { margin-top: 14px; }
+.log {
+  margin: 0;
+  max-height: 180px;
+  overflow-y: auto;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: #b9c5da;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+footer {
+  position: fixed;
+  left: 0; right: 0; bottom: 0;
+  display: flex;
+  gap: 10px;
+  justify-content: flex-end;
+  padding: 14px 20px;
+  background: rgba(15, 20, 32, 0.9);
+  backdrop-filter: blur(6px);
+  border-top: 1px solid var(--border);
+}
+
+button {
+  padding: 9px 18px;
+  border-radius: 9px;
+  border: 1px solid var(--border);
+  background: var(--panel);
+  color: var(--text);
+  font-size: 13px;
+  cursor: pointer;
+  transition: 0.15s;
+}
+button:hover { border-color: var(--accent); }
+button.danger:hover { border-color: var(--err); color: var(--err); }
+
+/* Manual jump to the dsh deploy page (shown once dsh is up). */
+button.jump {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+button.jump:hover {
+  filter: brightness(1.12);
+  border-color: var(--accent);
+}
+
+@media (max-width: 720px) {
+  main { grid-template-columns: 1fr; }
+}

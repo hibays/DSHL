@@ -1,0 +1,9 @@
+/target
+# webui prebuilt static library downloaded by its build script
+webui-2-static.lib
+libwebui-2-static.a
+# local config (the user owns this file)
+dshl.toml
+# dsh runtime log
+*.dsh.log
+/.tmp-*
