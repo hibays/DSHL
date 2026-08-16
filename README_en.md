@@ -1,6 +1,8 @@
-> 🌐 [简体中文](./README.md) | **English**
-
 # DSHL — DeepSeek Harness web launcher
+
+> [简体中文](./README.md) | **English**
+
+![_](docs/screenshot_1.webp)
 
 DSHL is a small, native launcher written in **Rust** that boots the
 **DeepSeek Harness web UI** (`dsh web`) inside a browser, using
@@ -56,13 +58,13 @@ runtime.
 
 ## Requirements
 
-| Tool   | Version        | Required?                              |
-|--------|----------------|----------------------------------------|
-| Node   | `>= 24.15.0`   | **always** (installs `26` if missing)  |
+| Tool   | Version        | Required?                                   |
+|--------|----------------|---------------------------------------------|
+| Node   | `>= 24.15.0`   | **always** (installs `26` if missing)       |
 | Bun    | `>= 1.3.14`    | only when `pm = "bun"` / `exector = "bunx"` |
-| fnm    | any            | preferred Node version manager         |
-| cargo  | any            | used to `cargo install fnm` as fallback |
-| nvm    | any            | last managed fallback                  |
+| fnm    | any            | preferred Node version manager              |
+| cargo  | any            | used to `cargo install fnm` as fallback     |
+| nvm    | any            | last managed fallback                       |
 
 ## Install / build
 

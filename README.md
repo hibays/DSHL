@@ -1,6 +1,8 @@
-> 🌐 **简体中文** | [English](./README_en.md)
-
 # DSHL — DeepSeek Harness web 启动器
+
+> **简体中文** | [English](./README_en.md)
+
+![_](docs/screenshot_1.webp)
 
 DSHL 是一个轻量的原生启动器，以 [webui.me](https://webui.me) 作为启动 UI 包装，
 在浏览器里启动 **DeepSeek Harness Web UI**（`dsh web`）。它会检查运行环境，必要时
