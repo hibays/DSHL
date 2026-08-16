@@ -27,9 +27,7 @@ fn exit_app(_e: webui::Event) {
 fn retry(_e: webui::Event) {
     let stale = state::STALE_PID.load(std::sync::atomic::Ordering::SeqCst);
     if stale != 0 && crate::platform::process_alive(stale) {
-        progress::set_error(format!(
-            "残留的 dsh 进程 (pid {stale}) 仍在运行。请点击「强制结束残留进程」结束它，或手动结束后再点重试。"
-        ));
+        progress::set_error(t!("ui.bindings.stale_running", pid = stale));
         return;
     }
     if stale != 0 {
@@ -60,16 +58,12 @@ fn force_kill_stale(_e: webui::Event) {
             std::thread::sleep(std::time::Duration::from_millis(200));
         }
         if crate::platform::process_alive(pid) {
-            progress::set_error(format!(
-                "强制结束失败：pid {pid} 仍然存活，请手动结束该进程。"
-            ));
+            progress::set_error(t!("ui.bindings.kill_failed", pid = pid));
             return;
         }
         state::STALE_PID.store(0, std::sync::atomic::Ordering::SeqCst);
         progress::set_stale_pid(None);
-        progress::log(format!(
-            "残留的 dsh 进程 (pid {pid}) 已被强制结束，重新启动…"
-        ));
+        progress::log(t!("ui.bindings.killed", pid = pid));
         launch_flow();
     });
 }

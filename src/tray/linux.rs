@@ -150,12 +150,12 @@ pub fn start() {
             }
 
             let menu = gtk_menu_new();
-            let restore = c"恢复窗口".as_ptr();
-            let open_dsh = c"打开 dsh".as_ptr();
-            let quit = c"退出".as_ptr();
-            let restore_item = gtk_menu_item_new_with_label(restore);
-            let open_dsh_item = gtk_menu_item_new_with_label(open_dsh);
-            let quit_item = gtk_menu_item_new_with_label(quit);
+            let restore = std::ffi::CString::new(t!("tray.restore")).unwrap();
+            let open_dsh = std::ffi::CString::new(t!("tray.open_dsh")).unwrap();
+            let quit = std::ffi::CString::new(t!("tray.quit")).unwrap();
+            let restore_item = gtk_menu_item_new_with_label(restore.as_ptr());
+            let open_dsh_item = gtk_menu_item_new_with_label(open_dsh.as_ptr());
+            let quit_item = gtk_menu_item_new_with_label(quit.as_ptr());
             g_signal_connect(
                 restore_item,
                 c"activate".as_ptr(),

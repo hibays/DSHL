@@ -97,8 +97,16 @@ pub(crate) fn proxied_github(mirror: &MirrorConfig, original: &str) -> String {
 /// node install chain, see [`super::node`]).
 pub(crate) async fn install_fnm_binary(mirror: &MirrorConfig) -> Result<PathBuf> {
     let bin = platform::bin_dir();
-    std::fs::create_dir_all(&bin)
-        .map_err(|e| Error(format!("创建目录失败 {}: {e}", bin.display())))?;
+    std::fs::create_dir_all(&bin).map_err(|e| {
+        Error(
+            t!(
+                "install.download.mkdir_failed",
+                path = bin.display(),
+                err = e
+            )
+            .to_string(),
+        )
+    })?;
 
     let asset = match platform::os() {
         platform::Os::Windows => "fnm-windows.zip",
@@ -113,11 +121,12 @@ pub(crate) async fn install_fnm_binary(mirror: &MirrorConfig) -> Result<PathBuf>
     let target = platform::with_ext("fnm");
     let located = locate_file(&bin, "fnm")
         .or_else(|| locate_file(&bin, &target))
-        .ok_or_else(|| Error("fnm 下载解压完成，但未找到 fnm 二进制".into()))?;
+        .ok_or_else(|| Error(t!("install.download.no_fnm").to_string()))?;
 
     let final_path = bin.join(target);
     if located != final_path {
-        std::fs::copy(&located, &final_path).map_err(|e| Error(format!("复制 fnm 失败: {e}")))?;
+        std::fs::copy(&located, &final_path)
+            .map_err(|e| Error(t!("install.download.copy_failed", err = e).to_string()))?;
     }
     make_executable(&final_path);
     Ok(final_path)

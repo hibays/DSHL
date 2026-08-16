@@ -32,77 +32,91 @@ pub async fn ensure_node(mirror: &MirrorConfig) -> Result<PathBuf> {
                     .and_then(|p| p.parent())
                     .map(|p| p.to_path_buf());
                 if let Some(d) = dir {
-                    progress::log(format!("node {v} 满足要求 (>= {NODE_MIN})"));
+                    progress::log(t!(
+                        "install.node.satisfies",
+                        v = v,
+                        min = NODE_MIN.to_string()
+                    ));
                     return Ok(d);
                 }
             } else {
-                progress::log(format!(
-                    "node {v} 过旧 (需要 >= {NODE_MIN})，将安装 {NODE_INSTALL_VERSION}"
+                progress::log(t!(
+                    "install.node.too_old",
+                    v = v,
+                    min = NODE_MIN.to_string(),
+                    install = NODE_INSTALL_VERSION
                 ));
             }
         } else {
-            progress::log("已找到 node 但无法解析版本，将重新安装".to_string());
+            progress::log(t!("install.node.unparsable"));
         }
     } else {
-        progress::log("未找到 node，需要安装".to_string());
+        progress::log(t!("install.node.not_found"));
     }
     install_node(mirror).await
 }
 
 /// Install node `NODE_INSTALL_VERSION` through the fallback chain.
 async fn install_node(mirror: &MirrorConfig) -> Result<PathBuf> {
-    progress::log(format!("开始安装 Node.js {NODE_INSTALL_VERSION}"));
+    progress::log(t!("install.node.starting", version = NODE_INSTALL_VERSION));
 
     // 1. fnm already present
     if let Some(fnm) = platform::which("fnm") {
-        progress::log(format!("使用现有 fnm ({})", fnm.display()));
+        progress::log(t!(
+            "install.node.using_fnm",
+            path = fnm.display().to_string()
+        ));
         if let Ok(dir) = install_node_with_fnm(&fnm, mirror).await {
             return Ok(dir);
         }
-        progress::log("fnm 安装失败，尝试下一级回退".to_string());
+        progress::log(t!("install.node.fnm_failed"));
     }
 
     // 2. cargo install fnm
     if probe::cargo().found {
-        progress::log("尝试 cargo install fnm".to_string());
+        progress::log(t!("install.node.try_cargo"));
         match install_fnm_via_cargo(mirror).await {
             Ok(fnm) => {
                 if let Ok(dir) = install_node_with_fnm(&fnm, mirror).await {
                     return Ok(dir);
                 }
-                progress::log("cargo 安装的 fnm 安装 node 失败，继续回退".to_string());
+                progress::log(t!("install.node.cargo_fnm_node_failed"));
             }
-            Err(e) => progress::log(format!("cargo install fnm 失败: {e}")),
+            Err(e) => progress::log(t!("install.node.cargo_failed", err = e.to_string())),
         }
     }
 
     // 3. nvm
     if probe::nvm().found {
-        progress::log("尝试使用 nvm 安装 node".to_string());
+        progress::log(t!("install.node.try_nvm"));
         if let Ok(dir) = install_node_with_nvm(mirror).await {
             return Ok(dir);
         }
-        progress::log("nvm 安装失败，继续回退".to_string());
+        progress::log(t!("install.node.nvm_failed"));
     }
 
     // 4. best-effort auto-install fnm into ~/.cache/bin
     match download::install_fnm_binary(mirror).await {
         Ok(fnm) => {
-            progress::log(format!(
-                "已自动安装 fnm 到 {}，继续安装 node",
-                fnm.display()
+            progress::log(t!(
+                "install.node.auto_fnm_installed",
+                path = fnm.display().to_string()
             ));
             if let Ok(dir) = install_node_with_fnm(&fnm, mirror).await {
                 return Ok(dir);
             }
         }
-        Err(e) => progress::log(format!("fnm 自动安装失败: {e}")),
+        Err(e) => progress::log(t!("install.node.auto_fnm_failed", err = e.to_string())),
     }
 
-    Err(Error(format!(
-        "无法自动安装 Node.js {NODE_INSTALL_VERSION}。\n请手动安装 fnm（{}）到 ~/.cache/bin 后重新启动。",
-        FNM_GUIDE_URL
-    )))
+    Err(Error(
+        t!(
+            "install.node.fatal",
+            version = NODE_INSTALL_VERSION,
+            url = FNM_GUIDE_URL
+        )
+        .to_string(),
+    ))
 }
 
 async fn install_node_with_fnm(fnm: &Path, mirror: &MirrorConfig) -> Result<PathBuf> {
@@ -112,10 +126,10 @@ async fn install_node_with_fnm(fnm: &Path, mirror: &MirrorConfig) -> Result<Path
     run_streaming(cmd, "fnm install").await?;
 
     if let Some(dir) = find_node_bin() {
-        progress::log(format!("node 安装完成，位于 {}", dir.display()));
+        progress::log(t!("install.node.fnm_done", dir = dir.display().to_string()));
         return Ok(dir);
     }
-    Err(Error("fnm 安装 node 成功，但未能定位 node 目录".into()))
+    Err(Error(t!("install.node.fnm_no_dir").to_string()))
 }
 
 async fn install_fnm_via_cargo(mirror: &MirrorConfig) -> Result<PathBuf> {
@@ -137,9 +151,7 @@ async fn install_fnm_via_cargo(mirror: &MirrorConfig) -> Result<PathBuf> {
     if let Some(p) = platform::which("fnm") {
         return Ok(p);
     }
-    Err(Error(
-        "cargo install fnm 成功，但找不到 fnm 可执行文件".into(),
-    ))
+    Err(Error(t!("install.node.cargo_no_fnm").to_string()))
 }
 
 async fn install_node_with_nvm(mirror: &MirrorConfig) -> Result<PathBuf> {
@@ -175,7 +187,7 @@ async fn install_node_with_nvm(mirror: &MirrorConfig) -> Result<PathBuf> {
     if let Some(dir) = find_node_bin() {
         return Ok(dir);
     }
-    Err(Error("nvm 安装 node 成功，但未能定位 node 目录".into()))
+    Err(Error(t!("install.node.nvm_no_dir").to_string()))
 }
 
 /// Recursively search for a directory containing `node`/`node.exe` under the

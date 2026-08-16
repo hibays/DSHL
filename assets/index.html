@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>DSHL · DeepSeek Harness Launcher</title>
+    <title data-i18n="page.title">DSHL · DeepSeek Harness Launcher</title>
     <script src="webui.js"></script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
@@ -17,7 +17,7 @@
             <p>DeepSeek Harness Launcher</p>
           </div>
         </div>
-        <div class="status" id="status-badge">启动中…</div>
+        <div class="status" id="status-badge" data-i18n="page.badge.starting">启动中…</div>
       </header>
 
       <div class="error" id="error" hidden></div>
@@ -25,41 +25,42 @@
       <div class="crash" id="crash" hidden>
         <div id="crash-msg"></div>
         <div class="crash-actions">
-          <button id="btn-restart-now" class="jump" onclick="restart_now()">立即重启</button>
-          <button id="btn-cancel-restart" onclick="cancel_restart()">取消</button>
+          <button id="btn-restart-now" class="jump" onclick="restart_now()" data-i18n="page.btn.restart_now">立即重启</button>
+          <button id="btn-cancel-restart" onclick="cancel_restart()" data-i18n="page.btn.cancel">取消</button>
         </div>
       </div>
 
       <main>
         <section class="card">
-          <h2>启动流程</h2>
+          <h2 data-i18n="page.heading.steps">启动流程</h2>
           <ol class="steps" id="steps"></ol>
         </section>
 
         <section class="card">
-          <h2>配置 <span class="path" id="config-path"></span></h2>
+          <h2><span data-i18n="page.heading.config">配置</span> <span class="path" id="config-path"></span></h2>
           <div class="config-error" id="config-error" hidden></div>
           <div class="kv" id="config-view"></div>
         </section>
       </main>
 
       <section class="card log-card">
-        <h2>日志</h2>
+        <h2 data-i18n="page.heading.log">日志</h2>
         <pre class="log" id="log"></pre>
       </section>
 
       <footer>
-        <button id="btn-open-dsh" class="jump" onclick="open_dsh()" hidden>
+        <button id="btn-open-dsh" class="jump" onclick="open_dsh()" hidden data-i18n="page.btn.open_dsh">
           跳转到 dsh 页面
         </button>
-        <button id="btn-force-kill" class="danger" onclick="force_kill_stale()" hidden>
+        <button id="btn-force-kill" class="danger" onclick="force_kill_stale()" hidden data-i18n="page.btn.force_kill">
           强制结束残留进程
         </button>
-        <button id="btn-retry" onclick="retry()">重试</button>
-        <button id="btn-config" onclick="open_config()">打开配置</button>
-        <button id="btn-exit" class="danger" onclick="exit_app()">退出</button>
+        <button id="btn-retry" onclick="retry()" data-i18n="page.btn.retry">重试</button>
+        <button id="btn-config" onclick="open_config()" data-i18n="page.btn.open_config">打开配置</button>
+        <button id="btn-exit" class="danger" onclick="exit_app()" data-i18n="page.btn.exit">退出</button>
       </footer>
     </div>
+    <script src="/i18n.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

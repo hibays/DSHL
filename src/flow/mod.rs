@@ -20,13 +20,13 @@ pub mod prepare;
 pub mod runtime_env;
 pub mod system;
 
-/// Canonical step list shown in the startup UI.
+/// Canonical step list shown in the startup UI (id, translation key).
 pub const STEPS: &[(&str, &str)] = &[
-    ("system", "检查系统环境与架构"),
-    ("runtime", "检查运行环境 (node/bun)"),
-    ("mirror", "检查国内镜像"),
-    ("dsh", "准备 dsh (install/x)"),
-    ("launch", "启动 dsh web"),
+    ("system", "flow.steps.system"),
+    ("runtime", "flow.steps.runtime"),
+    ("mirror", "flow.steps.mirror"),
+    ("dsh", "flow.steps.dsh"),
+    ("launch", "flow.steps.launch"),
 ];
 
 /// Outcome of a successful launch.
@@ -53,7 +53,13 @@ macro_rules! run_step {
 
 /// Run the full startup pipeline.
 pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Launch> {
-    progress::reset(STEPS);
+    // Localize the step titles before handing them to the UI (t! reads the
+    // current locale; the keys are the `flow.steps.*` literals from STEPS).
+    let steps: Vec<(&'static str, String)> = STEPS
+        .iter()
+        .map(|&(id, key)| (id, t!(key).to_string()))
+        .collect();
+    progress::reset(&steps);
     progress::clear_error();
 
     run_step!("system", system::run());
@@ -69,7 +75,7 @@ pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Launch> {
             let Some(fallback) = fallback else {
                 return Err(err);
             };
-            progress::log(format!("直接启动失败（{err}），改用 runner 重试"));
+            progress::log(t!("flow.launch.retry_runner", err = err.to_string()));
             // Stop the failed attempt's child first. It is usually already
             // dead (early exit), but on a URL timeout it is still running —
             // starting a second dsh next to it would make two processes write
@@ -80,9 +86,7 @@ pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Launch> {
             if let Some(child) = crate::DSH_CHILD.lock().unwrap().take()
                 && !child.graceful_kill(10_000)
             {
-                progress::log(
-                    "旧的 dsh 未响应退出请求，为避免会话日志损坏，放弃 runner 重试".to_string(),
-                );
+                progress::log(t!("flow.launch.stale_no_exit"));
                 // The old dsh is still running. Put it back into the global
                 // slot so a later retry (`launch_flow`) finds it and stops it
                 // via Ctrl+C before starting a new dsh — two processes writing

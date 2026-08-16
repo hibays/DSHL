@@ -35,13 +35,13 @@ pub async fn ensure_bun(config: &Config, mirror: &MirrorConfig) -> Result<Option
                     .as_ref()
                     .and_then(|p| p.parent())
                     .map(|p| p.to_path_buf());
-                progress::log(format!("bun {v} 满足要求 (>= {BUN_MIN})"));
+                progress::log(t!("install.bun.satisfies", v = v, min = BUN_MIN));
                 return Ok(dir);
             }
-            progress::log(format!("bun {v} 过旧 (需要 >= {BUN_MIN})，将安装新版"));
+            progress::log(t!("install.bun.too_old", v = v, min = BUN_MIN));
         }
     } else {
-        progress::log("未找到 bun，需要安装".to_string());
+        progress::log(t!("install.bun.not_found"));
     }
 
     install_bun(mirror).await.map(Some)
@@ -57,7 +57,7 @@ async fn install_bun(mirror: &MirrorConfig) -> Result<PathBuf> {
     //    b) github through the `github` proxy prefix (when configured),
     //    c) github directly.
     let url = bun_download_url(mirror);
-    progress::log(format!("下载 bun: {url}"));
+    progress::log(t!("install.bun.downloading", url = url));
     if let Ok(()) = download::download_zip(&url, &install_dir).await
         && let Some(found) = download::locate_file(&install_dir, "bun")
     {
@@ -71,7 +71,7 @@ async fn install_bun(mirror: &MirrorConfig) -> Result<PathBuf> {
             return Ok(bin);
         }
     }
-    progress::log("bun 直连下载失败，回退到官方脚本".to_string());
+    progress::log(t!("install.bun.direct_failed"));
 
     // 2. Official install script.
     let script = if platform::os() == platform::Os::Windows {
@@ -95,7 +95,7 @@ async fn install_bun(mirror: &MirrorConfig) -> Result<PathBuf> {
     }
 
     // 3. npm fallback (respects the npm registry mirror).
-    progress::log("官方脚本未成功，尝试 npm i -g bun".to_string());
+    progress::log(t!("install.bun.script_failed"));
     let mut npm = Command::new(platform::tool("npm"));
     npm.args(["install", "-g", "bun"]);
     process::with_env(&mut npm, &mirror.npm_env());
@@ -106,7 +106,7 @@ async fn install_bun(mirror: &MirrorConfig) -> Result<PathBuf> {
         return Ok(parent.to_path_buf());
     }
 
-    Err(Error("bun 安装失败".into()))
+    Err(Error(t!("install.bun.failed").to_string()))
 }
 
 /// Resolve the direct bun binary download URL.

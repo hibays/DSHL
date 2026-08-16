@@ -10,12 +10,12 @@ use crate::progress::{self, StepStatus};
 
 fn describe(t: &Tool) -> String {
     if !t.found {
-        return "未安装".to_string();
+        return t!("flow.runtime.not_installed").to_string();
     }
     let ver = match t.version {
         Some(v) => v.to_string(),
         None if !t.raw.is_empty() => format!("({})", t.raw.trim()),
-        None => "版本未知".to_string(),
+        None => t!("flow.runtime.version_unknown").to_string(),
     };
     let path = t
         .path
@@ -26,11 +26,7 @@ fn describe(t: &Tool) -> String {
 }
 
 pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Runtime> {
-    progress::step(
-        "runtime",
-        StepStatus::Running,
-        "探测 node/bun/pnpm/fnm/cargo/nvm…",
-    );
+    progress::step("runtime", StepStatus::Running, t!("flow.runtime.probing"));
 
     // Report the whole toolchain first (transparency). Each probe spawns a
     // child process (pnpm --version alone takes ~0.5s), so they run in
@@ -74,7 +70,7 @@ pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Runtime> {
     // freshly installed dsh is reachable even when they are not on PATH.
     let pnpm_dirs = install::ensure_pnpm(config, mirror, &node_dir).await?;
 
-    progress::step("runtime", StepStatus::Done, "运行环境就绪");
+    progress::step("runtime", StepStatus::Done, t!("flow.runtime.ready"));
     Ok(Runtime {
         node_dir: Some(node_dir),
         bun_dir,

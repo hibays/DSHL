@@ -50,13 +50,11 @@ pub fn launch_flow() {
                 let pid = child.pid().unwrap_or(0);
                 state::STALE_PID.store(pid, Ordering::SeqCst);
                 progress::set_stale_pid(Some(pid));
-                progress::set_error(format!(
-                    "残留的 dsh 进程 (pid {pid}) 未响应 Ctrl+C 退出请求。为避免两个 dsh 同时写入同一会话日志（聊天记录将永久损坏），本次启动已取消。请点击「强制结束残留进程」结束它，或手动结束后再点重试。"
-                ));
+                progress::set_error(t!("ui.launch.stale_no_exit", pid = pid));
                 state::FLOW_RUNNING.store(false, Ordering::SeqCst);
                 return;
             }
-            progress::log("残留的 dsh 进程已退出，继续启动");
+            progress::log(t!("ui.launch.stale_exited"));
         }
 
         // The cleanup above can take up to 10s; if the user closed the window
@@ -77,7 +75,7 @@ pub fn launch_flow() {
             .unwrap_or_default();
         progress::set_config(config_json, path_str, loaded.parse_error.clone());
         if let Some(err) = &loaded.parse_error {
-            progress::log(format!("dshl.toml 解析错误：{err}"));
+            progress::log(t!("ui.launch.config_error", err = err.to_string()));
         }
 
         let mirror = MirrorConfig::resolve(&loaded.config);
@@ -92,9 +90,7 @@ pub fn launch_flow() {
         if loaded.config.dsh.single_instance
             && let Some(pid) = crate::platform::dsh_instance_running()
         {
-            progress::set_error(format!(
-                "single-instance 已启用：检测到另一个 dsh 实例 (pid {pid}) 正在运行。为避免两个 dsh 同时写入同一会话日志（聊天记录将永久损坏），本次启动已取消。请先关闭现有的 dsh，或把 dshl.toml 的 single-instance 设为 false。"
-            ));
+            progress::set_error(t!("ui.launch.single_instance", pid = pid));
             state::FLOW_RUNNING.store(false, Ordering::SeqCst);
             return;
         }

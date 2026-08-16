@@ -16,15 +16,21 @@
 //!   APIs via windows-rs 0.62.
 //! - [`tray`]: the close-to-tray status icon, one implementation per OS
 //!   behind a 6-function interface.
+//! - [`i18n`]: locale detection + the startup translation init.
 //! - [`ui`]: the window layer (assets, bindings, lifecycle, launch flow,
 //!   supervisor loop).
 //! - [`flow`]: the startup pipeline (prepare → install → launch).
 //! - everything else: config, mirror resolution, probes, progress, keep-alive.
 
+// Load I18n macro so `t!` is usable crate-wide.
+#[macro_use]
+extern crate rust_i18n;
+
 pub mod config;
 pub mod debug;
 pub mod error;
 pub mod flow;
+pub mod i18n;
 pub mod install;
 pub mod mirror;
 pub mod platform;
@@ -36,6 +42,11 @@ pub mod tray;
 pub mod ui;
 pub mod version;
 pub mod wskeep;
+
+// Init the translations (locales/ dir) with zh-CN as the fallback so any
+// untranslated key degrades to Chinese (the app's original language) instead
+// of a blank string.
+i18n!("locales", fallback = "zh-CN");
 
 use std::sync::{Arc, LazyLock, Mutex};
 

@@ -5,7 +5,7 @@ use crate::platform;
 use crate::progress::{self, StepStatus};
 
 pub async fn run() -> Result<()> {
-    progress::step("system", StepStatus::Running, "检测系统信息…");
+    progress::step("system", StepStatus::Running, t!("flow.system.running"));
 
     let os = platform::os_name();
     let arch = platform::arch_name();
@@ -19,11 +19,11 @@ pub async fn run() -> Result<()> {
         platform::Shell::Sh => "sh",
     };
 
-    progress::log(format!("操作系统: {os}"));
-    progress::log(format!("CPU 架构: {arch}"));
+    progress::log(t!("flow.system.os", os = os));
+    progress::log(t!("flow.system.arch", arch = arch));
     progress::log(format!("Shell: {shell}"));
     if !home.is_empty() {
-        progress::log(format!("用户目录: {home}"));
+        progress::log(t!("flow.system.home", home = home));
     }
 
     progress::step("system", StepStatus::Done, format!("{os}/{arch}"));

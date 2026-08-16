@@ -11,21 +11,21 @@ use crate::mirror::MirrorConfig;
 use crate::progress::{self, StepStatus};
 
 pub async fn run(mirror: &MirrorConfig) -> Result<()> {
-    progress::step("mirror", StepStatus::Running, "解析镜像策略…");
+    progress::step("mirror", StepStatus::Running, t!("flow.mirror.resolving"));
 
     let mode = match mirror.mode {
-        MirrorMode::Off => "off（禁用）",
-        MirrorMode::On => "on（自动，默认）",
-        MirrorMode::Force => "force（强制）",
+        MirrorMode::Off => t!("flow.mirror.off"),
+        MirrorMode::On => t!("flow.mirror.on"),
+        MirrorMode::Force => t!("flow.mirror.force"),
     };
     progress::log(format!("auto-mirror = {mode}"));
 
     let summary = mirror.summary();
     if summary.is_empty() {
-        progress::log("未配置任何国内镜像（地址均为空）");
+        progress::log(t!("flow.mirror.none"));
     } else {
         for (key, value) in summary {
-            progress::log(format!("镜像 {key} = {value}"));
+            progress::log(t!("flow.mirror.entry", key = key, value = value));
         }
     }
 

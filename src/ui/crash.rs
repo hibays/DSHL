@@ -39,13 +39,15 @@ pub fn begin(code: i32) {
     // again.
     progress::clear_url();
     progress::set_crash(code, CRASH_COUNTDOWN_SECS as u8);
-    progress::log(format!(
-        "dsh 意外退出（exit {code}），{CRASH_COUNTDOWN_SECS} 秒后自动重启"
+    progress::log(t!(
+        "ui.crash.banner",
+        code = code,
+        secs = CRASH_COUNTDOWN_SECS
     ));
     // The countdown message lives in the banner (`state.crash`); keep the
     // prominent error text to just the fact, so the two don't read as a
     // duplicated paragraph.
-    progress::set_error(format!("dsh 进程意外退出（exit {code}）。"));
+    progress::set_error(t!("ui.crash.error", code = code));
 
     // The UI event loop (main thread) navigates back to the startup page —
     // or restores the tray window showing it — so the countdown is visible.
@@ -89,9 +91,7 @@ fn countdown(generation: u32, code: i32) {
         // still restart manually via 重试).
         if state::CRASH_CANCELLED.load(Ordering::SeqCst) {
             if state::CRASH_GEN.load(Ordering::SeqCst) == generation {
-                progress::set_error(format!(
-                    "dsh 进程意外退出（exit {code}），已取消自动重启。可点击「重试」手动重启，或「退出」。"
-                ));
+                progress::set_error(t!("ui.crash.cancelled", code = code));
             }
             crate::debug::emit("crash recovery cancelled by user");
             finish(generation);
@@ -99,7 +99,7 @@ fn countdown(generation: u32, code: i32) {
         }
         // 立即重启 clicked, or the countdown expired with no action.
         if state::CRASH_RESTART_NOW.load(Ordering::SeqCst) || Instant::now() >= deadline {
-            progress::log("dsh 意外退出，正在自动重启…");
+            progress::log(t!("ui.crash.restarting"));
             crate::debug::emit("crash recovery: auto-restarting dsh");
             finish(generation);
             launch_flow();

@@ -67,9 +67,9 @@ fn ensure_started() {
         STARTED.store(false, Ordering::SeqCst);
         return;
     };
-    let restore = MenuItem::with_id(MENU_RESTORE, "恢复窗口", true, None);
-    let open_dsh = MenuItem::with_id(MENU_OPEN_URL, "打开 dsh", true, None);
-    let quit = MenuItem::with_id(MENU_QUIT, "退出", true, None);
+    let restore = MenuItem::with_id(MENU_RESTORE, t!("tray.restore"), true, None);
+    let open_dsh = MenuItem::with_id(MENU_OPEN_URL, t!("tray.open_dsh"), true, None);
+    let quit = MenuItem::with_id(MENU_QUIT, t!("tray.quit"), true, None);
     let menu = Menu::new();
     if menu.append_items(&[&restore, &open_dsh, &quit]).is_err() {
         crate::debug::emit("tray: failed to build menu");

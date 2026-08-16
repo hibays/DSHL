@@ -34,18 +34,18 @@ pub async fn ensure_pnpm(
     let pnpm = probe::pnpm();
     if pnpm.found {
         match pnpm.version {
-            Some(v) => progress::log(format!("pnpm {v} 满足要求")),
+            Some(v) => progress::log(t!("install.pnpm.satisfies", v = v)),
             None => {
                 let path = pnpm
                     .path
                     .as_ref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_default();
-                progress::log(format!("已找到 pnpm ({path})"));
+                progress::log(t!("install.pnpm.found", path = path));
             }
         }
     } else {
-        progress::log("未找到 pnpm，通过 npm 安装".to_string());
+        progress::log(t!("install.pnpm.not_found"));
         let mut cmd = Command::new(platform::tool("npm"));
         cmd.args(["install", "-g", "pnpm"]);
         // The npm of a freshly installed fnm node lives in `node_dir`, which

@@ -5,7 +5,46 @@
 "use strict";
 
 const $ = (id) => document.getElementById(id);
-const STATUS_TEXT = { pending: "等待", running: "进行中", done: "完成", error: "失败", skipped: "跳过" };
+
+// i18n: /i18n.js (served by the backend vfs, loaded before this file) exposes
+// window.DSHL_LOCALE and window.DSHL_I18N. tr() looks up a key and replaces
+// %{var} placeholders; unknown keys fall back to the key itself.
+function tr(key, vars) {
+  let s = (window.DSHL_I18N && window.DSHL_I18N[key]) || key;
+  if (vars) {
+    for (const [k, v] of Object.entries(vars)) {
+      s = s.split(`%{${k}}`).join(String(v));
+    }
+  }
+  return s;
+}
+
+// Apply translations to every element marked with data-i18n (set once at
+// startup; static markup keeps its translated text for the whole session).
+function applyDataI18n() {
+  document.documentElement.lang = window.DSHL_LOCALE || "zh-CN";
+  for (const el of document.querySelectorAll("[data-i18n]")) {
+    const key = el.getAttribute("data-i18n");
+    const v = tr(key);
+    if (el.id === "status-badge") {
+      // The badge's running text is redrawn by renderStatus() on every poll,
+      // so only the initial value matters here.
+      el.textContent = v;
+    } else if (el.tagName === "TITLE") {
+      document.title = v;
+    } else {
+      el.textContent = v;
+    }
+  }
+}
+
+const STATUS_TEXT = {
+  pending: tr("page.status.pending"),
+  running: tr("page.status.running"),
+  done: tr("page.status.done"),
+  error: tr("page.status.error"),
+  skipped: tr("page.status.skipped"),
+};
 const DOT_CLASS = { pending: "", running: "running", done: "done", error: "error", skipped: "skipped" };
 
 // The dsh web URL as last reported by the backend (set once dsh is up).
@@ -35,7 +74,7 @@ function renderConfig(state) {
   const ce = $("config-error");
   if (state.config_error) {
     ce.hidden = false;
-    ce.textContent = `配置文件加载失败，已使用默认配置：\n${state.config_error}`;
+    ce.textContent = tr("page.config_error_prefix", { err: state.config_error });
   } else {
     ce.hidden = true;
   }
@@ -53,7 +92,7 @@ function renderConfig(state) {
     ];
     if (cfg.mirrors) {
       for (const [k, v] of Object.entries(cfg.mirrors)) {
-        rows.push([`mirrors.${k}`, v || "(空)"]);
+        rows.push([`mirrors.${k}`, v || tr("page.empty_value")]);
       }
     }
     for (const [k, v] of rows) {
@@ -95,8 +134,10 @@ function renderCrash(state) {
   const c = state.crash;
   if (c && c.countdown > 0) {
     el.hidden = false;
-    $("crash-msg").textContent =
-      `dsh 进程意外退出（exit ${c.code}），${c.countdown} 秒后自动重启…`;
+    $("crash-msg").textContent = tr("page.crash.message", {
+      code: c.code,
+      countdown: c.countdown,
+    });
   } else {
     el.hidden = true;
   }
@@ -106,16 +147,16 @@ function renderStatus(state) {
   const badge = $("status-badge");
   // During crash recovery there is no running dsh — don't claim otherwise.
   if (state.crash && state.crash.countdown > 0) {
-    badge.textContent = "dsh 意外退出";
+    badge.textContent = tr("page.badge.crash");
     badge.style.color = "var(--err)";
   } else if (state.url) {
-    badge.textContent = "已启动 → 跳转…";
+    badge.textContent = tr("page.badge.started");
     badge.style.color = "var(--ok)";
   } else if (state.error) {
-    badge.textContent = "启动失败";
+    badge.textContent = tr("page.badge.failed");
     badge.style.color = "var(--err)";
   } else {
-    badge.textContent = "启动中…";
+    badge.textContent = tr("page.badge.starting");
     badge.style.color = "var(--accent)";
   }
 }
@@ -170,4 +211,5 @@ async function poll() {
 }
 
 setInterval(poll, 250);
+applyDataI18n();
 poll();

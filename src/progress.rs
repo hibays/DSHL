@@ -75,13 +75,13 @@ const LOG_CAP: usize = 500;
 static STATE: LazyLock<Mutex<State>> = LazyLock::new(|| Mutex::new(State::default()));
 
 /// Initialise the step list (id, title) and clear transient state.
-pub fn reset(steps: &[(&'static str, &'static str)]) {
+pub fn reset(steps: &[(&'static str, String)]) {
     let mut state = STATE.lock().unwrap();
     state.steps = steps
         .iter()
         .map(|(id, title)| Step {
             id: id.to_string(),
-            title: title.to_string(),
+            title: title.clone(),
             status: StepStatus::Pending,
             message: String::new(),
         })

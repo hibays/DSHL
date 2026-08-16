@@ -127,7 +127,7 @@ fn dsh_version_ok(tool: &probe::Tool, wanted: &str) -> bool {
 async fn install_dsh(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> Result<()> {
     let spec = config.dsh.package_spec();
     let pm = pm_name(config.dsh.pm);
-    progress::log(format!("安装 dsh: {spec}（pm={pm}）"));
+    progress::log(t!("flow.prepare.installing", spec = spec, pm = pm));
 
     let mut cmd = match config.dsh.pm {
         Pm::Npm => {
@@ -212,7 +212,7 @@ pub async fn run(
     mirror: &MirrorConfig,
     runtime: &Runtime,
 ) -> Result<(Command, Option<Command>)> {
-    progress::step("dsh", StepStatus::Running, "准备 dsh…");
+    progress::step("dsh", StepStatus::Running, t!("flow.prepare.preparing"));
 
     let flags = split_args(&config.dsh.flags);
 
@@ -264,7 +264,7 @@ pub async fn run(
         DshMode::Install => {
             let dsh = probe::dsh_in(&runtime.path_prefix());
             if !dsh.found {
-                progress::log("dsh 未安装，开始安装".to_string());
+                progress::log(t!("flow.prepare.not_installed"));
                 install_dsh(config, mirror, runtime).await?;
             } else if config.dsh.wants_latest() {
                 // No pinned version: auto-update decides whether to refresh.
@@ -272,33 +272,40 @@ pub async fn run(
                     match query_latest_version(config, mirror, runtime).await {
                         Some(latest) => match FullVersion::parse(&dsh.raw) {
                             Some(installed) if installed >= latest => {
-                                progress::log(format!("dsh 已是最新版本：{installed}"));
+                                progress::log(t!(
+                                    "flow.prepare.up_to_date",
+                                    installed = installed.to_string()
+                                ));
                             }
                             _ => {
-                                progress::log(format!(
-                                    "发现新版 dsh（当前 {}，最新 {latest}），自动更新",
-                                    dsh.raw.trim()
+                                progress::log(t!(
+                                    "flow.prepare.updating",
+                                    current = dsh.raw.trim(),
+                                    latest = latest.to_string()
                                 ));
                                 install_dsh(config, mirror, runtime).await?;
                             }
                         },
                         None => {
-                            progress::log(format!(
-                                "无法查询最新版本（可能离线），使用已安装的 {}",
-                                dsh.raw.trim()
+                            progress::log(t!(
+                                "flow.prepare.version_query_failed",
+                                installed = dsh.raw.trim()
                             ));
                         }
                     }
                 } else {
-                    progress::log(format!("auto-update 关闭，使用已安装的 {}", dsh.raw.trim()));
+                    progress::log(t!(
+                        "flow.prepare.auto_update_off",
+                        installed = dsh.raw.trim()
+                    ));
                 }
             } else if dsh_version_ok(&dsh, &config.dsh.version) {
-                progress::log(format!("dsh 已安装：{}", dsh.raw.trim()));
+                progress::log(t!("flow.prepare.installed", installed = dsh.raw.trim()));
             } else {
-                progress::log(format!(
-                    "dsh 已安装但版本不匹配（需要 {}，当前 {}），重新安装",
-                    config.dsh.version,
-                    dsh.raw.trim()
+                progress::log(t!(
+                    "flow.prepare.version_mismatch",
+                    wanted = config.dsh.version,
+                    current = dsh.raw.trim()
                 ));
                 install_dsh(config, mirror, runtime).await?;
             }
@@ -320,21 +327,23 @@ pub async fn run(
                 format!("dsh@{}", config.dsh.version)
             };
             if installed.found && dsh_version_ok(&installed, &config.dsh.version) {
-                progress::log(format!(
-                    "x 模式：通过 {} 运行已安装的 dsh（{}）",
-                    exector_name(config.dsh.exector),
-                    installed.raw.trim()
+                progress::log(t!(
+                    "flow.prepare.x_installed",
+                    exector = exector_name(config.dsh.exector),
+                    installed = installed.raw.trim()
                 ));
             } else {
-                progress::log(format!(
-                    "x 模式：通过 {} 运行 {target}（{}{}）",
-                    exector_name(config.dsh.exector),
-                    if installed.found {
-                        "已安装版本不匹配，由 runner 解析 "
-                    } else {
-                        "dsh 未安装，由 runner 下载 "
-                    },
-                    config.dsh.package_spec()
+                let desc = if installed.found {
+                    t!("flow.prepare.runner_resolve")
+                } else {
+                    t!("flow.prepare.runner_download")
+                };
+                progress::log(t!(
+                    "flow.prepare.x_runner",
+                    exector = exector_name(config.dsh.exector),
+                    target = target,
+                    desc = desc,
+                    spec = config.dsh.package_spec()
                 ));
             }
             let fallback = if installed.found {
@@ -350,7 +359,7 @@ pub async fn run(
     if let Some(fb) = &mut fallback {
         apply_path(fb, runtime);
     }
-    progress::step("dsh", StepStatus::Done, "dsh 就绪");
+    progress::step("dsh", StepStatus::Done, t!("flow.prepare.ready"));
     Ok((cmd, fallback))
 }
 

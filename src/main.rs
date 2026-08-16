@@ -65,6 +65,9 @@ fn main() {
     // don't bitmap-scale/blur the embedded WebView.
     dshl::platform::make_dpi_aware();
 
+    // Pick the UI language once, before any translation is rendered.
+    dshl::i18n::init();
+
     let cli = parse_args();
 
     // `DSHL_LOG` (any non-empty value) is an alternative way to enable it.

@@ -34,7 +34,7 @@ fn url_regex() -> &'static Regex {
 }
 
 pub async fn run(mut command: Command) -> Result<Launch> {
-    progress::step("launch", StepStatus::Running, "启动 dsh…");
+    progress::step("launch", StepStatus::Running, t!("flow.launch.starting"));
 
     let path = log_path();
     if let Some(parent) = path.parent() {
@@ -45,17 +45,29 @@ pub async fn run(mut command: Command) -> Result<Launch> {
         .write(true)
         .truncate(true)
         .open(&path)
-        .map_err(|e| Error(format!("无法打开日志文件 {}: {e}", path.display())))?;
+        .map_err(|e| {
+            Error(
+                t!(
+                    "flow.launch.log_open_failed",
+                    path = path.display().to_string(),
+                    err = e
+                )
+                .to_string(),
+            )
+        })?;
 
     let child = Arc::new(
         AsyncChild::spawn_console(&mut command)
-            .map_err(|e| Error(format!("启动 dsh 失败: {e}")))?,
+            .map_err(|e| Error(t!("flow.launch.spawn_failed", err = e).to_string()))?,
     );
     let pid = child.pid().unwrap_or(0);
     *crate::DSH_CHILD.lock().unwrap() = Some(child.clone());
 
-    progress::log(format!("dsh 进程已启动 (pid {pid})"));
-    progress::log(format!("日志文件: {}", path.display()));
+    progress::log(t!("flow.launch.started", pid = pid));
+    progress::log(t!(
+        "flow.launch.log_path",
+        path = path.display().to_string()
+    ));
 
     let url = stream_until_url(&child, &mut log_file).await?;
 
@@ -87,17 +99,14 @@ async fn stream_until_url(child: &AsyncChild, log_file: &mut std::fs::File) -> R
                     .exit_code()
                     .map(|c| c.to_string())
                     .unwrap_or_else(|| "unknown".into());
-                return Err(Error(format!(
-                    "dsh 提前退出（exit {code}），未输出 web 地址"
-                )));
+                return Err(Error(t!("flow.launch.early_exit", code = code).to_string()));
             }
         }
 
         if start.elapsed() > URL_TIMEOUT {
-            return Err(Error(format!(
-                "等待 dsh web 地址超时（{} 秒）",
-                URL_TIMEOUT.as_secs()
-            )));
+            return Err(Error(
+                t!("flow.launch.url_timeout", secs = URL_TIMEOUT.as_secs()).to_string(),
+            ));
         }
     }
 }

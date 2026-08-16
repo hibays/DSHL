@@ -125,16 +125,18 @@ unsafe extern "system" fn wnd_proc(
                     // explicit selection (or Esc), which feels stuck.
                     let menu = CreatePopupMenu();
                     if let Ok(menu) = menu {
-                        let restore: Vec<u16> = "恢复窗口"
+                        let restore: Vec<u16> = t!("tray.restore")
                             .encode_utf16()
                             .chain(std::iter::once(0))
                             .collect();
-                        let open_dsh: Vec<u16> = "打开 dsh"
+                        let open_dsh: Vec<u16> = t!("tray.open_dsh")
                             .encode_utf16()
                             .chain(std::iter::once(0))
                             .collect();
-                        let quit: Vec<u16> =
-                            "退出".encode_utf16().chain(std::iter::once(0)).collect();
+                        let quit: Vec<u16> = t!("tray.quit")
+                            .encode_utf16()
+                            .chain(std::iter::once(0))
+                            .collect();
                         let _ =
                             AppendMenuW(menu, MF_STRING, MENU_RESTORE, PCWSTR(restore.as_ptr()));
                         let _ =
