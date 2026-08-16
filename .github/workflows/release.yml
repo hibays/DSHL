@@ -73,11 +73,15 @@ jobs:
         run: |
           set -euo pipefail
           BIN="target/${{ matrix.target }}/release/dshl${{ matrix.ext }}"
-          rm -rf stage && mkdir -p stage
+          rm -rf stage portable && mkdir -p stage portable
           cp "$BIN" "stage/dshl${{ matrix.ext }}"
-          cp dshl.example.toml stage/dshl.toml
           cp README.md stage/
           cp README_en.md stage/
+          # dshl.toml ships ONLY in the portable zip. Installers (NSIS/deb/dmg)
+          # intentionally ship without a config: the launcher auto-generates a
+          # commented default template in the platform config directory when no
+          # config file is found.
+          cp dshl.example.toml portable/dshl.toml
 
       - name: Package zip
         shell: bash
@@ -86,6 +90,7 @@ jobs:
           STAGE="dshl-${{ matrix.artifact }}"
           rm -rf "$STAGE" && mkdir -p "$STAGE"
           cp stage/* "$STAGE/"
+          cp portable/dshl.toml "$STAGE/"
           PY="$(command -v python3 || command -v python)"
           "$PY" - "$STAGE" "dshl-${{ matrix.artifact }}.zip" <<'PY'
           import os, sys, zipfile
@@ -126,14 +131,14 @@ jobs:
         shell: bash
         run: |
           bash packing/linux/build-deb.sh \
-            "stage/dshl" "$VERSION" "${{ matrix.deb_arch }}" "." "stage/dshl.toml"
+            "stage/dshl" "$VERSION" "${{ matrix.deb_arch }}" "."
 
       - name: Package macOS installer (.dmg)
         if: matrix.family == 'macos'
         shell: bash
         run: |
           bash packing/macos/build-dmg.sh \
-            "stage/dshl" "$VERSION" "." "stage/dshl.toml" "dshl-${{ matrix.artifact }}.dmg"
+            "stage/dshl" "$VERSION" "." "" "dshl-${{ matrix.artifact }}.dmg"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

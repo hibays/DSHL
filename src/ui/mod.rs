@@ -25,6 +25,7 @@
 pub mod assets;
 
 mod bindings;
+mod crash;
 mod launch;
 mod state;
 mod supervisor;

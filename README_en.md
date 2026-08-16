@@ -98,8 +98,8 @@ The launcher looks for `dshl.toml` in the following order, **first match wins**:
    - macOS: `~/Library/Application Support/dshl/dshl.toml`
    - Linux: `$XDG_CONFIG_HOME/dshl/dshl.toml` (or `~/.config/dshl/dshl.toml`
      when unset);
-5. the Linux system-wide config (lowest priority, installed by the distro
-   package): `/etc/dshl/dshl.toml`.
+5. the Linux system-wide config (lowest priority): `/etc/dshl/dshl.toml`
+   (the package ships without a config — place the file manually if needed).
 
 If none exists, the launcher **generates a default template** in the platform
 config directory (a compile-time copy of `dshl.example.toml`, fully commented)
@@ -198,20 +198,21 @@ dsh keeps running in the background:
 - **Windows** — the tray icon reuses the window icon. Left-**double-click** or
   the **Restore** menu item **rebuilds** the window (restoring the saved
   geometry) and navigates back to dsh; a single click does nothing (anti
-  accidental). The **Quit** menu item goes through the same graceful shutdown
-  path as Ctrl+C (SIGINT stops dsh and saves its session).
+  accidental). The menu also has **Open dsh** (opens the dsh page in the
+  system default browser) and **Quit** (same graceful shutdown path as
+  Ctrl+C: SIGINT stops dsh and saves its session).
 - **Linux** — WebKitGTK windows cannot be intercepted, so after a close the
   launcher keeps running **without a window**; the tray icon
   (libayatana-appindicator3, loaded at runtime; without the library the
   feature degrades to close-to-exit) offers **Restore window** (rebuilds and
-  re-navigates to dsh) and **Quit**.
+  re-navigates to dsh), **Open dsh** and **Quit**.
 - **macOS** — same model as Linux: after the WKWebView window closes the
   launcher keeps running without a window; a menu-bar status item
   (`tray-icon`'s AppKit backend, created on the main thread) offers
-  **Restore window** and **Quit**. The icon is an **NSImage template**
-  (black + alpha mask), so macOS renders it in the menu-bar colour in both
-  light and dark mode automatically — no icon swapping needed; a single
-  left click restores the window, right click opens the menu.
+  **Restore window**, **Open dsh** and **Quit**. The icon is an **NSImage
+  template** (black + alpha mask), so macOS renders it in the menu-bar colour
+  in both light and dark mode automatically — no icon swapping needed; a
+  single left click restores the window, right click opens the menu.
 
 Closing the window during startup (dsh not ready yet) still exits directly.
 
@@ -254,7 +255,16 @@ supervisor**, so shutting down is always clean:
     high-DPI displays.
   - `browser` — external browser (Chrome/Edge/Firefox…), detected by tracking the
     browser window process and polling for its exit.
-- dsh exits on its own → the launcher exits too.
+- dsh exits **cleanly** (exit 0, e.g. its graceful Ctrl+C shutdown) → the
+  launcher exits too.
+- after a successful launch, dsh exits **unexpectedly** (non-zero exit code /
+  killed by a signal) → **crash recovery**: the window jumps back to the
+  startup page and shows a "dsh exited unexpectedly (exit N)" banner with a
+  **5-second countdown**
+  before auto-restarting (立即重启 / 取消). On timeout (or 立即重启) the full
+  launch pipeline runs again and jumps back to dsh; 取消 keeps the startup page
+  for a manual 重试 or 退出. If the window is in the tray it is re-created
+  first so the countdown is visible.
 - Ctrl+C / SIGTERM → kills dsh, then exits.
 - dsh is stopped **gracefully** (Ctrl+C on Windows via a hidden console +
   `GenerateConsoleCtrlEvent`, SIGTERM on Unix) and given up to 10s (retry

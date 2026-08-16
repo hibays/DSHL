@@ -15,6 +15,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 static STARTED: AtomicBool = AtomicBool::new(false);
 static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static RESTORE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static OPEN_URL_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// The dlopen'd library handles, stored as `usize` (raw pointers are neither
 /// `Send` nor `Sync`, so they cannot live in a `static`).
 static LIBS: OnceLock<(usize, usize)> = OnceLock::new();
@@ -49,6 +50,9 @@ unsafe extern "C" fn on_restore(_w: *mut c_void, _d: *mut c_void) {
 }
 unsafe extern "C" fn on_quit(_w: *mut c_void, _d: *mut c_void) {
     QUIT_REQUESTED.store(true, Ordering::SeqCst);
+}
+unsafe extern "C" fn on_open_url(_w: *mut c_void, _d: *mut c_void) {
+    OPEN_URL_REQUESTED.store(true, Ordering::SeqCst);
 }
 
 /// Spawn the AppIndicator thread (idempotent).
@@ -147,13 +151,21 @@ pub fn start() {
 
             let menu = gtk_menu_new();
             let restore = c"恢复窗口".as_ptr();
+            let open_dsh = c"打开 dsh".as_ptr();
             let quit = c"退出".as_ptr();
             let restore_item = gtk_menu_item_new_with_label(restore);
+            let open_dsh_item = gtk_menu_item_new_with_label(open_dsh);
             let quit_item = gtk_menu_item_new_with_label(quit);
             g_signal_connect(
                 restore_item,
                 c"activate".as_ptr(),
                 on_restore,
+                std::ptr::null_mut(),
+            );
+            g_signal_connect(
+                open_dsh_item,
+                c"activate".as_ptr(),
+                on_open_url,
                 std::ptr::null_mut(),
             );
             g_signal_connect(
@@ -163,6 +175,7 @@ pub fn start() {
                 std::ptr::null_mut(),
             );
             gtk_menu_shell_append(menu, restore_item);
+            gtk_menu_shell_append(menu, open_dsh_item);
             gtk_menu_shell_append(menu, quit_item);
             gtk_widget_show_all(menu);
             indicator_set_menu(indicator, menu);
@@ -186,6 +199,11 @@ pub fn quit_requested() -> bool {
 /// True when the user chose "restore window" from the tray menu.
 pub fn restore_requested() -> bool {
     RESTORE_REQUESTED.swap(false, Ordering::SeqCst)
+}
+
+/// True when the user chose "打开 dsh" from the tray menu.
+pub fn open_url_requested() -> bool {
+    OPEN_URL_REQUESTED.swap(false, Ordering::SeqCst)
 }
 
 /// The appindicator icon comes from the desktop theme (id "dsh"); nothing to

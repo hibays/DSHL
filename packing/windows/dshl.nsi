@@ -1,7 +1,9 @@
 ﻿; DSHL Windows installer (NSIS 3).
 ;
-; Build from the repository root after staging `dshl.exe` + `dshl.toml` into a
-; directory (default `stage`):
+; Build from the repository root after staging `dshl.exe` into a directory
+; (default `stage`). The installer intentionally ships WITHOUT dshl.toml —
+; the launcher auto-generates a default template in the platform config
+; directory when no config file is found.
 ;
 ;   makensis -V3 -DSTAGE_DIR=stage -DPRODUCT_VERSION=0.1.0 \
 ;            -DOUTFILE=dshl-setup.exe packing/windows/dshl.nsi
@@ -78,7 +80,6 @@ Section "${APP_NAME}" SEC_MAIN
   SetOutPath "$INSTDIR"
 
   File "${STAGE_DIR}\${BINARY_NAME}"
-  File "${STAGE_DIR}\dshl.toml"
 
   WriteUninstaller "$INSTDIR\uninstall.exe"
 
@@ -116,7 +117,6 @@ SectionEnd
 
 Section "Uninstall"
   Delete "$INSTDIR\${BINARY_NAME}"
-  Delete "$INSTDIR\dshl.toml"
   Delete "$INSTDIR\uninstall.exe"
   RMDir "$INSTDIR"
 

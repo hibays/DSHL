@@ -102,8 +102,19 @@ async fn stream_until_url(child: &AsyncChild, log_file: &mut std::fs::File) -> R
     }
 }
 
-/// Keep draining dsh's output into the log until it exits (supervisor duty).
-pub async fn supervise(child: Arc<AsyncChild>) {
+/// How the supervised dsh process ended.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DshExit {
+    /// dsh exited cleanly (code 0) — the launcher shuts down as before.
+    Clean,
+    /// dsh exited unexpectedly: a non-zero exit code (e.g. a panic or an OS
+    /// crash), or `-1` when it was killed by a signal / the code is unknown.
+    Crash(i32),
+}
+
+/// Keep draining dsh's output into the log until it exits (supervisor duty),
+/// then report how it ended.
+pub async fn supervise(child: Arc<AsyncChild>) -> DshExit {
     let path = log_path();
     let mut log_file = std::fs::OpenOptions::new()
         .create(true)
@@ -119,6 +130,15 @@ pub async fn supervise(child: Arc<AsyncChild>) {
             let _ = writeln!(f, "{text}");
         }
         progress::log(&text);
+    }
+
+    // `next_line()` returns `None` only after the process has exited AND both
+    // output streams have been drained, so the exit code is available here.
+    match child.exit_code() {
+        Some(0) => DshExit::Clean,
+        Some(code) => DshExit::Crash(code),
+        // Killed by a signal (Unix) or the code was never captured.
+        None => DshExit::Crash(-1),
     }
 }
 

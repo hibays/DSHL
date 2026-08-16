@@ -5,7 +5,9 @@
 #   binary    path to the dshl executable
 #   version   e.g. 0.1.0
 #   outdir    directory to write the .dmg into
-#   config    dshl.toml source (defaults to dshl.example.toml in the repo root)
+#   config    dshl.toml source; when empty the .app ships WITHOUT a config
+#             (the launcher auto-generates a default template in the platform
+#             config directory). Optional.
 #   outname   output .dmg file name (defaults to dshl-<version>.dmg)
 #   icon_dir  directory holding dsh.png (1024px, black) — the .icns is built
 #             from it with sips + iconutil (defaults to packing/macos, run
@@ -15,7 +17,7 @@ set -euo pipefail
 BIN="$1"
 VERSION="$2"
 OUTDIR="$3"
-CONFIG="${4:-dshl.example.toml}"
+CONFIG="${4:-}"
 OUTNAME="${5:-dshl-${VERSION}.dmg}"
 ICON_DIR="${6:-packing/macos}"
 
@@ -26,7 +28,9 @@ rm -rf "$APP"
 mkdir -p "$CONTENTS/MacOS" "$CONTENTS/Resources"
 
 install -m 0755 "$BIN" "$CONTENTS/MacOS/dshl"
-install -m 0644 "$CONFIG" "$CONTENTS/MacOS/dshl.toml"
+if [ -n "$CONFIG" ]; then
+  install -m 0644 "$CONFIG" "$CONTENTS/MacOS/dshl.toml"
+fi
 
 # Build the .icns from the 1024px source PNG via a standard iconset.
 ICONSET="$APP/dshl.iconset"

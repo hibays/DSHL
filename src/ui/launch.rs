@@ -118,11 +118,25 @@ pub fn launch_flow() {
                         window::capture_webview_hwnd();
                     }
 
-                    // Supervise dsh: drain its output until it exits. When it
-                    // exits (or is killed), ask the event loop to shut down.
-                    runtime::block_on(flow::launch::supervise(launch.child));
+                    // Supervise dsh: drain its output until it exits. A clean
+                    // exit (code 0) shuts the launcher down as before; an
+                    // unexpected exit starts crash recovery instead (back to
+                    // the startup page + a 5s auto-restart countdown).
+                    match runtime::block_on(flow::launch::supervise(launch.child)) {
+                        flow::launch::DshExit::Clean => {
+                            state::SHOULD_EXIT.store(true, Ordering::SeqCst);
+                        }
+                        flow::launch::DshExit::Crash(code) => {
+                            // The user already closed the window (e.g. a
+                            // non-tray exit); don't resurrect, just exit.
+                            if state::SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+                                state::SHOULD_EXIT.store(true, Ordering::SeqCst);
+                            } else {
+                                super::crash::begin(code);
+                            }
+                        }
+                    }
                 }
-                state::SHOULD_EXIT.store(true, Ordering::SeqCst);
             }
             Err(_) => {
                 // The error is already rendered via progress::set_error. The

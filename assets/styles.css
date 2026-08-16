@@ -76,6 +76,22 @@ header {
   line-height: 1.5;
 }
 
+.crash {
+  background: rgba(245, 184, 61, 0.1);
+  border: 1px solid var(--warn);
+  color: #ffe3a3;
+  padding: 12px 16px;
+  border-radius: 10px;
+  margin-bottom: 16px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+.crash-actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 10px;
+}
+
 main {
   display: grid;
   grid-template-columns: 1fr 1fr;

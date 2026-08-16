@@ -37,6 +37,7 @@ use tray_icon::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 /// items themselves.
 const MENU_RESTORE: &str = "dshl.restore";
 const MENU_QUIT: &str = "dshl.quit";
+const MENU_OPEN_URL: &str = "dshl.open_url";
 
 static STARTED: AtomicBool = AtomicBool::new(false);
 /// True once the status item exists (allows `start` to be retried after a
@@ -44,6 +45,7 @@ static STARTED: AtomicBool = AtomicBool::new(false);
 static BUILT: AtomicBool = AtomicBool::new(false);
 static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 static RESTORE_REQUESTED: AtomicBool = AtomicBool::new(false);
+static OPEN_URL_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 /// Record intent only — the real creation happens on the main thread on the
 /// next poll (see module docs). Idempotent.
@@ -66,9 +68,10 @@ fn ensure_started() {
         return;
     };
     let restore = MenuItem::with_id(MENU_RESTORE, "恢复窗口", true, None);
+    let open_dsh = MenuItem::with_id(MENU_OPEN_URL, "打开 dsh", true, None);
     let quit = MenuItem::with_id(MENU_QUIT, "退出", true, None);
     let menu = Menu::new();
-    if menu.append_items(&[&restore, &quit]).is_err() {
+    if menu.append_items(&[&restore, &open_dsh, &quit]).is_err() {
         crate::debug::emit("tray: failed to build menu");
         STARTED.store(false, Ordering::SeqCst);
         return;
@@ -123,6 +126,8 @@ fn poll() {
             RESTORE_REQUESTED.store(true, Ordering::SeqCst);
         } else if event.id == MENU_QUIT {
             QUIT_REQUESTED.store(true, Ordering::SeqCst);
+        } else if event.id == MENU_OPEN_URL {
+            OPEN_URL_REQUESTED.store(true, Ordering::SeqCst);
         }
     }
     // Status-item clicks: a left click (release) restores the window.
@@ -154,6 +159,13 @@ pub fn quit_requested() -> bool {
 pub fn restore_requested() -> bool {
     poll();
     RESTORE_REQUESTED.swap(false, Ordering::SeqCst)
+}
+
+/// True when the user chose "打开 dsh" from the menu — the launcher opens the
+/// dsh URL in the system default browser.
+pub fn open_url_requested() -> bool {
+    poll();
+    OPEN_URL_REQUESTED.swap(false, Ordering::SeqCst)
 }
 
 /// No-op: the icon is an NSImage template, so macOS adapts it to the current

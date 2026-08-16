@@ -44,6 +44,22 @@ pub(crate) static TRAYED: AtomicBool = AtomicBool::new(false);
 /// double-click or menu item during the slow rebuild does not stack
 /// requests.
 pub(crate) static RESTORING: AtomicBool = AtomicBool::new(false);
+/// Launcher page URL (`http://localhost:<port>/index.html`), captured when a
+/// window is created; the crash recovery navigates back to it.
+pub(crate) static LAUNCHER_URL: LazyLock<Mutex<String>> =
+    LazyLock::new(|| Mutex::new(String::new()));
+/// User cancelled the auto-restart (the countdown thread aborts).
+pub(crate) static CRASH_CANCELLED: AtomicBool = AtomicBool::new(false);
+/// User clicked 立即重启 — the countdown thread restarts dsh immediately.
+pub(crate) static CRASH_RESTART_NOW: AtomicBool = AtomicBool::new(false);
+/// Set by the launch worker after a crash; the UI event loop (main thread)
+/// navigates back to the launcher page / restores the tray window.
+pub(crate) static CRASH_NAVIGATE_PENDING: AtomicBool = AtomicBool::new(false);
+/// Monotonic generation of the crash-recovery run. Each new crash increments
+/// it; a superseded countdown thread notices `CRASH_GEN != its own` and exits
+/// without touching the newer banner, so back-to-back crashes never run two
+/// countdowns at once.
+pub(crate) static CRASH_GEN: AtomicU32 = AtomicU32::new(0);
 
 /// `--config` CLI value (kept for the launch flow).
 pub(crate) static CLI_CONFIG_PATH: LazyLock<Mutex<Option<PathBuf>>> =

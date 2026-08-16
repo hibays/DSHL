@@ -9,6 +9,7 @@ use webui::webui;
 use super::launch::kill_dsh;
 use super::state;
 use super::window;
+use crate::progress;
 use crate::tray;
 
 /// Run the webui event loop until shutdown, then clean up dsh and webui.
@@ -52,6 +53,27 @@ pub fn run_loop() {
         if tray::quit_requested() {
             crate::debug::emit("run_loop: tray quit requested");
             state::request_shutdown();
+        }
+
+        // Crash recovery: dsh exited unexpectedly. Navigate the window back
+        // to the launcher page so the user sees the auto-restart countdown —
+        // restoring the tray window first if it is currently hidden.
+        if state::CRASH_NAVIGATE_PENDING.swap(false, Ordering::SeqCst) {
+            crate::debug::emit("run_loop: crash recovery — show startup page");
+            if state::TRAYED.load(Ordering::SeqCst) {
+                window::restore_from_tray(true);
+            } else {
+                window::navigate_to_launcher();
+            }
+        }
+
+        // Tray "open dsh url": open the dsh deploy page in the system default
+        // browser (e.g. while the window is hidden to the tray).
+        if tray::open_url_requested()
+            && let Some(url) = progress::snapshot().url
+        {
+            crate::debug::emit(&format!("tray: opening dsh url in system browser ({url})"));
+            let _ = crate::platform::open_url(&url);
         }
 
         // Startup phase: if the window is gone before dsh was handed off,
@@ -114,7 +136,7 @@ pub fn run_loop() {
         // tray again ("closing opens a new window").
         if tray::restore_requested() {
             if state::TRAYED.load(Ordering::SeqCst) {
-                window::restore_from_tray();
+                window::restore_from_tray(false);
             } else {
                 crate::debug::emit("restore requested but window visible; focusing instead");
                 let hwnd = state::WEBVIEW_HWND.load(Ordering::SeqCst);
@@ -130,7 +152,7 @@ pub fn run_loop() {
         if crate::platform::single_instance::poll_activate() {
             crate::debug::emit("single-instance: activation requested by a second instance");
             if state::TRAYED.load(Ordering::SeqCst) {
-                window::restore_from_tray();
+                window::restore_from_tray(false);
             } else {
                 let hwnd = state::WEBVIEW_HWND.load(Ordering::SeqCst);
                 if hwnd != 0 {

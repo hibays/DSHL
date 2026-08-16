@@ -28,6 +28,16 @@ pub struct Step {
     pub message: String,
 }
 
+/// Crash-recovery banner: while dsh exited unexpectedly and an auto-restart is
+/// pending, the seconds until it restarts (the page shows a countdown with
+/// 立即重启 / 取消). `None` when no auto-restart is pending.
+#[derive(Debug, Clone, Copy, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CrashState {
+    pub code: i32,
+    pub countdown: u8,
+}
+
 /// Full UI snapshot.
 #[derive(Debug, Clone, Serialize)]
 pub struct State {
@@ -40,6 +50,8 @@ pub struct State {
     pub config_error: Option<String>,
     /// PID of a stale dsh awaiting the user's confirmation to force-kill.
     pub stale_pid: Option<u32>,
+    /// Crash-recovery banner (dsh exited unexpectedly, auto-restart pending).
+    pub crash: Option<CrashState>,
 }
 
 impl Default for State {
@@ -53,6 +65,7 @@ impl Default for State {
             config_json: String::new(),
             config_error: None,
             stale_pid: None,
+            crash: None,
         }
     }
 }
@@ -77,6 +90,7 @@ pub fn reset(steps: &[(&'static str, &'static str)]) {
     state.error = None;
     state.url = None;
     state.stale_pid = None;
+    state.crash = None;
 }
 
 /// Update a step's status/message.
@@ -115,12 +129,35 @@ pub fn set_stale_pid(pid: Option<u32>) {
     STATE.lock().unwrap().stale_pid = pid;
 }
 
+/// Set the crash-recovery banner: dsh exited unexpectedly and will be
+/// auto-restarted after `countdown` seconds (unless the user cancels).
+pub fn set_crash(code: i32, countdown: u8) {
+    STATE.lock().unwrap().crash = Some(CrashState { code, countdown });
+}
+
+/// Update the remaining countdown (`None` ends the banner).
+pub fn set_crash_countdown(countdown: Option<u8>) {
+    let mut state = STATE.lock().unwrap();
+    if let Some(crash) = &mut state.crash {
+        if let Some(secs) = countdown {
+            crash.countdown = secs;
+        } else {
+            state.crash = None;
+        }
+    }
+}
+
 pub fn clear_error() {
     STATE.lock().unwrap().error = None;
 }
 
 pub fn set_url(url: impl Into<String>) {
     STATE.lock().unwrap().url = Some(url.into());
+}
+
+/// Clear the dsh URL (e.g. when dsh exited — nothing is "running" anymore).
+pub fn clear_url() {
+    STATE.lock().unwrap().url = None;
 }
 
 /// Record the resolved config for display / config control.

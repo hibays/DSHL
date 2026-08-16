@@ -6,7 +6,9 @@
 #   version   e.g. 0.1.0
 #   arch      Debian architecture (amd64 / arm64)
 #   outdir    directory to write the .deb into
-#   config    dshl.toml source (defaults to dshl.example.toml in the repo root)
+#   config    dshl.toml source; when empty the package ships WITHOUT a config
+#             (the launcher auto-generates a default template in the platform
+#             config directory). Optional.
 #   icon_dir  directory holding dsh.png / dsh-white.png / dsh-512.png /
 #             dsh-white-512.png (defaults to packing/linux, run from repo root)
 set -euo pipefail
@@ -15,7 +17,7 @@ BIN="$1"
 VERSION="$2"
 ARCH="$3"
 OUTDIR="$4"
-CONFIG="${5:-dshl.example.toml}"
+CONFIG="${5:-}"
 ICON_DIR="${6:-packing/linux}"
 
 NAME="dshl"
@@ -25,14 +27,16 @@ ROOT="${PKG}"
 rm -rf "$ROOT"
 mkdir -p "$ROOT/DEBIAN" \
          "$ROOT/usr/bin" \
-         "$ROOT/etc/dshl" \
          "$ROOT/usr/share/applications" \
          "$ROOT/usr/share/doc/$NAME" \
          "$ROOT/usr/share/icons/hicolor/256x256/apps" \
          "$ROOT/usr/share/icons/hicolor/512x512/apps"
 
 install -m 0755 "$BIN" "$ROOT/usr/bin/dshl"
-install -m 0644 "$CONFIG" "$ROOT/etc/dshl/dshl.toml"
+if [ -n "$CONFIG" ]; then
+  mkdir -p "$ROOT/etc/dshl"
+  install -m 0644 "$CONFIG" "$ROOT/etc/dshl/dshl.toml"
+fi
 
 # App icons: black (default) + white (night/dark docks), 256px and 512px.
 install -m 0644 "$ICON_DIR/dsh.png"         "$ROOT/usr/share/icons/hicolor/256x256/apps/dshl.png"

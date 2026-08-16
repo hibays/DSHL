@@ -9,7 +9,7 @@
 //! mechanism as everywhere else).
 //!
 //! The module is deliberately decoupled from [`crate::ui`]: it exposes a
-//! tiny, platform-agnostic interface (same 6 functions on every OS) and each
+//! tiny, platform-agnostic interface (same 7 functions on every OS) and each
 //! platform has its own implementation:
 //!
 //! - [`windows`]: a hidden message-only window + `Shell_NotifyIconW`, all via
@@ -31,6 +31,8 @@
 //! - [`quit_requested`] / [`restore_requested`] are polled by the UI event
 //!   loop and fold platform events (menu clicks, icon clicks) into plain
 //!   booleans.
+//! - [`open_url_requested`] folds the "打开 dsh" menu item into a boolean the
+//!   UI loop polls to open the dsh URL in the system default browser.
 //! - [`set_icon`] swaps the day/night icon variant (no-op where the OS
 //!   adapts automatically, e.g. macOS templates).
 //! - [`shutdown`] removes the icon and stops background threads.
@@ -43,8 +45,14 @@ mod macos;
 mod windows;
 
 #[cfg(target_os = "linux")]
-pub use linux::{hide_to_tray, quit_requested, restore_requested, set_icon, shutdown, start};
+pub use linux::{
+    hide_to_tray, open_url_requested, quit_requested, restore_requested, set_icon, shutdown, start,
+};
 #[cfg(target_os = "macos")]
-pub use macos::{hide_to_tray, quit_requested, restore_requested, set_icon, shutdown, start};
+pub use macos::{
+    hide_to_tray, open_url_requested, quit_requested, restore_requested, set_icon, shutdown, start,
+};
 #[cfg(target_os = "windows")]
-pub use windows::{hide_to_tray, quit_requested, restore_requested, set_icon, shutdown, start};
+pub use windows::{
+    hide_to_tray, open_url_requested, quit_requested, restore_requested, set_icon, shutdown, start,
+};

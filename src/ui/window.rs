@@ -344,6 +344,7 @@ pub fn setup(cli_config_path: Option<PathBuf>) {
             crate::wskeep::spawn(port as u16);
         }
     }
+    remember_launcher_url();
     if !shown {
         crate::debug::emit("window failed to open");
     }
@@ -369,6 +370,30 @@ pub fn setup(cli_config_path: Option<PathBuf>) {
 pub(crate) fn navigate(url: &str) {
     let id = state::WINDOW_ID.load(Ordering::SeqCst);
     webui::navigate(id, url);
+}
+
+/// Record the launcher page URL (served by webui's own server) so crash
+/// recovery can navigate the window back to the startup page.
+fn remember_launcher_url() {
+    let window = webui::Window::from_id(state::WINDOW_ID.load(Ordering::SeqCst));
+    let port = window.get_port();
+    if port != 0 {
+        let url = format!("http://localhost:{port}/index.html");
+        *state::LAUNCHER_URL.lock().unwrap() = url;
+        crate::debug::emit(&format!(
+            "launcher page url: http://localhost:{port}/index.html"
+        ));
+    }
+}
+
+/// Navigate the window back to the launcher (startup) page — used when dsh
+/// exits unexpectedly so the crash-recovery banner can be shown.
+pub(crate) fn navigate_to_launcher() {
+    let url = state::LAUNCHER_URL.lock().unwrap().clone();
+    crate::debug::emit(&format!("navigate back to launcher page ({url})"));
+    if !url.is_empty() {
+        navigate(&url);
+    }
 }
 
 /// Apply the OS dark-mode look (titlebar + matching day/night window icon) to
@@ -459,8 +484,9 @@ pub(crate) fn capture_webview_hwnd() {
 /// Re-create the launcher window after it was closed to tray: re-apply the
 /// saved geometry, show the WebView, navigate back to dsh, and re-capture
 /// the HWND. Shared by the tray "restore" menu and single-instance
-/// activation.
-pub(crate) fn restore_from_tray() {
+/// activation. With `show_launcher` the window shows the startup page instead
+/// of dsh (crash recovery).
+pub(crate) fn restore_from_tray(show_launcher: bool) {
     // Restore fires only once per request: while the (slow) window rebuild
     // is running, further double-clicks or menu items are ignored. If the
     // rebuild fails, the guard is released so the user can retry.
@@ -478,7 +504,7 @@ pub(crate) fn restore_from_tray() {
         window.set_position(x, y);
     }
     if window.show_wv("index.html") {
-        if let Some(url) = progress::snapshot().url {
+        if !show_launcher && let Some(url) = progress::snapshot().url {
             window.navigate(&url);
         }
         // webui closes a WebView ~1.5s after its bridge disconnects (the
@@ -490,6 +516,8 @@ pub(crate) fn restore_from_tray() {
         if port != 0 {
             crate::wskeep::spawn(port as u16);
         }
+        // The fresh window has its own server port; record its launcher URL.
+        remember_launcher_url();
         // Capture the new HWND synchronously so the supervisor loop sees a
         // live handle immediately (the async capture would lag behind and
         // the stale-zero HWND could look like "no window").

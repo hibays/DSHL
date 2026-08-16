@@ -22,6 +22,14 @@
 
       <div class="error" id="error" hidden></div>
 
+      <div class="crash" id="crash" hidden>
+        <div id="crash-msg"></div>
+        <div class="crash-actions">
+          <button id="btn-restart-now" class="jump" onclick="restart_now()">立即重启</button>
+          <button id="btn-cancel-restart" onclick="cancel_restart()">取消</button>
+        </div>
+      </div>
+
       <main>
         <section class="card">
           <h2>启动流程</h2>

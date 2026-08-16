@@ -36,6 +36,7 @@ const WM_TRAY_CALLBACK: u32 = WM_APP + 1;
 const DOUBLE_CLICK_MS: u64 = 400;
 const MENU_RESTORE: usize = 1;
 const MENU_QUIT: usize = 2;
+const MENU_OPEN_URL: usize = 3;
 const CW_USEDEFAULT: i32 = -1;
 const HWND_MESSAGE: HWND = HWND(-3isize as *mut _);
 /// Tray icon resource id (embedded by build.rs, same as the window icon).
@@ -49,6 +50,8 @@ static ICON_ACTIVE: AtomicBool = AtomicBool::new(false);
 static QUIT_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// User chose "restore window" from the tray (click or menu).
 static RESTORE_REQUESTED: AtomicBool = AtomicBool::new(false);
+/// User chose "open dsh url" from the tray menu.
+static OPEN_URL_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// Currently applied tray icon handle (so a replacement can be freed).
 static CURRENT_ICON: AtomicUsize = AtomicUsize::new(0);
 /// Timestamp (ms) of the last left click, for double-click detection.
@@ -87,6 +90,10 @@ unsafe extern "system" fn wnd_proc(
             QUIT_REQUESTED.store(true, Ordering::SeqCst);
             return LRESULT(0);
         }
+        if msg == WM_COMMAND && wparam.0 & 0xffff == MENU_OPEN_URL {
+            OPEN_URL_REQUESTED.store(true, Ordering::SeqCst);
+            return LRESULT(0);
+        }
         if msg == WM_TRAY_CALLBACK {
             // For Shell_NotifyIcon callback messages, wParam is the icon
             // ID and lParam is the mouse message (WM_LBUTTONUP /
@@ -122,10 +129,16 @@ unsafe extern "system" fn wnd_proc(
                             .encode_utf16()
                             .chain(std::iter::once(0))
                             .collect();
+                        let open_dsh: Vec<u16> = "打开 dsh"
+                            .encode_utf16()
+                            .chain(std::iter::once(0))
+                            .collect();
                         let quit: Vec<u16> =
                             "退出".encode_utf16().chain(std::iter::once(0)).collect();
                         let _ =
                             AppendMenuW(menu, MF_STRING, MENU_RESTORE, PCWSTR(restore.as_ptr()));
+                        let _ =
+                            AppendMenuW(menu, MF_STRING, MENU_OPEN_URL, PCWSTR(open_dsh.as_ptr()));
                         let _ = AppendMenuW(menu, MF_STRING, MENU_QUIT, PCWSTR(quit.as_ptr()));
                         let (x, y) = cursor_pos();
                         // TrackPopupMenu only dismisses on an outside click
@@ -388,6 +401,12 @@ pub fn quit_requested() -> bool {
 /// on close to save memory).
 pub fn restore_requested() -> bool {
     RESTORE_REQUESTED.swap(false, Ordering::SeqCst)
+}
+
+/// True when the user chose "打开 dsh" from the tray menu — the launcher
+/// opens the dsh URL in the system default browser.
+pub fn open_url_requested() -> bool {
+    OPEN_URL_REQUESTED.swap(false, Ordering::SeqCst)
 }
 
 /// Remove the icon and stop the message loop (on shutdown).

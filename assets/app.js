@@ -87,9 +87,28 @@ function renderError(state) {
   }
 }
 
+// Crash-recovery banner: dsh exited unexpectedly and an auto-restart is
+// counting down (立即重启 / 取消 call the bound restart_now / cancel_restart
+// backend functions; the countdown itself runs on the Rust side).
+function renderCrash(state) {
+  const el = $("crash");
+  const c = state.crash;
+  if (c && c.countdown > 0) {
+    el.hidden = false;
+    $("crash-msg").textContent =
+      `dsh 进程意外退出（exit ${c.code}），${c.countdown} 秒后自动重启…`;
+  } else {
+    el.hidden = true;
+  }
+}
+
 function renderStatus(state) {
   const badge = $("status-badge");
-  if (state.url) {
+  // During crash recovery there is no running dsh — don't claim otherwise.
+  if (state.crash && state.crash.countdown > 0) {
+    badge.textContent = "dsh 意外退出";
+    badge.style.color = "var(--err)";
+  } else if (state.url) {
     badge.textContent = "已启动 → 跳转…";
     badge.style.color = "var(--ok)";
   } else if (state.error) {
@@ -106,6 +125,7 @@ function render(state) {
   renderConfig(state);
   renderLog(state.logs || []);
   renderError(state);
+  renderCrash(state);
   renderStatus(state);
   // Force-kill confirmation button: visible only while a stale dsh process
   // is waiting for the user to decide. Clicking it calls the bound
@@ -119,6 +139,8 @@ function render(state) {
   } else {
     sessionStorage.removeItem("dshl:dsh-url");
   }
+  // Hide the jump button while the crashed dsh is recovering (its URL is
+  // gone anyway — `crash::begin` clears it).
   $("btn-open-dsh").hidden = !dshUrl;
 }
 

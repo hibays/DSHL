@@ -16,6 +16,10 @@ fn get_state(e: webui::Event) {
 }
 
 fn exit_app(_e: webui::Event) {
+    // Setting SHUTDOWN_REQUESTED too closes the race where a crash-recovery
+    // auto-restart lands in the same instant: launch_flow() and the worker
+    // both guard on it, so dsh is never spawned into a mid-exit launcher.
+    state::SHUTDOWN_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
     state::SHOULD_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
     webui::exit();
 }
@@ -82,6 +86,18 @@ fn open_config(_e: webui::Event) {
     let _ = crate::platform::open_path(&path);
 }
 
+/// 立即重启 from the crash-recovery banner: the countdown thread restarts dsh
+/// right away (it is the single owner of the restart, so there is no race).
+fn restart_now(_e: webui::Event) {
+    state::CRASH_RESTART_NOW.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
+/// 取消 from the crash-recovery banner: stop the auto-restart (the user can
+/// still restart manually via 重试).
+fn cancel_restart(_e: webui::Event) {
+    state::CRASH_CANCELLED.store(true, std::sync::atomic::Ordering::SeqCst);
+}
+
 /// Register all frontend bindings on a fresh window.
 pub(crate) fn register(window: &webui::Window) {
     window.bind("get_state", get_state);
@@ -89,4 +105,6 @@ pub(crate) fn register(window: &webui::Window) {
     window.bind("retry", retry);
     window.bind("force_kill_stale", force_kill_stale);
     window.bind("open_config", open_config);
+    window.bind("restart_now", restart_now);
+    window.bind("cancel_restart", cancel_restart);
 }
