@@ -175,7 +175,7 @@ jobs:
           {
             echo "## Commits"
             echo ""
-            git log --pretty=format:'- %s (%h)' "$RANGE"
+            git log --encoding=UTF-8 --pretty=format:'- %s (%h)' "$RANGE"
             echo ""
           } > CHANGELOG.md
           {
