@@ -211,8 +211,11 @@ dsh 已启动时关闭窗口不再退出，dsh 继续在后台运行：
     webui 服务端保持一个保活 WebSocket（`multi_client`），使窗口在跳转到 dsh 后仍
     保持打开；通过 webui 的 `set_close_handler_wv`（Windows 上还有窗口句柄）检测
     关闭。进程已设为 DPI 感知（`PerMonitorV2`），高分屏下 WebView 清晰不模糊。
-  - `browser` — 外部浏览器（Chrome/Edge/Firefox…），通过跟踪浏览器窗口进程并轮询
-    其退出来检测。
+  - `browser` — 外部浏览器（Chrome/Edge/Firefox…）。无需保活 WebSocket：
+    webui 停服时会尝试终止*外部*浏览器进程，但该进程查找是尽力而为，在现代
+    Windows/Edge 上不会触发，所以浏览器跳到 dsh 后自己保持打开。启动器通过跟踪
+    浏览器窗口进程并轮询其退出来检测关闭，`close-to-tray` 时同样进托盘（恢复时
+    重新打开浏览器）。
 - dsh **正常退出**（exit 0，例如 Ctrl+C 后自存的优雅关闭）→ 启动器也随之退出。
 - dsh **成功启动后意外退出**（非零退出码 / 被信号杀死）→ **崩溃恢复**：窗口跳回启动页，
   显示「dsh 意外退出（exit N）」横幅并**倒计时 5 秒**自动重启（立即重启 / 取消）；

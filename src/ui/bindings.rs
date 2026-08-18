@@ -16,12 +16,12 @@ fn get_state(e: webui::Event) {
 }
 
 fn exit_app(_e: webui::Event) {
-    // Setting SHUTDOWN_REQUESTED too closes the race where a crash-recovery
-    // auto-restart lands in the same instant: launch_flow() and the worker
-    // both guard on it, so dsh is never spawned into a mid-exit launcher.
-    state::SHUTDOWN_REQUESTED.store(true, std::sync::atomic::Ordering::SeqCst);
-    state::SHOULD_EXIT.store(true, std::sync::atomic::Ordering::SeqCst);
-    webui::exit();
+    // Funnel into the composed shutdown. The flags are set here (thread-safe);
+    // the run_loop observes them on the main thread and drives the full
+    // webui-canonical teardown (`webui::exit()` → `webui::clean()`, see
+    // `super::exit`) — the same pattern webui's own examples use, and the
+    // same path as tray-quit / Ctrl+C / window close.
+    super::exit::request_shutdown();
 }
 
 fn retry(_e: webui::Event) {

@@ -255,8 +255,13 @@ supervisor**, so shutting down is always clean:
     webui's `set_close_handler_wv` (plus the window handle on Windows). The
     process is made DPI-aware (`PerMonitorV2`) so the WebView is crisp on
     high-DPI displays.
-  - `browser` — external browser (Chrome/Edge/Firefox…), detected by tracking the
-    browser window process and polling for its exit.
+  - `browser` — external browser (Chrome/Edge/Firefox…). No keep-alive is
+    needed: webui's server-timeout path tries to terminate the *external*
+    browser process, but that lookup is best-effort and does not fire on
+    modern Windows/Edge, so the browser stays open on its own after
+    navigating to dsh. The launcher detects the close by tracking the browser
+    window process and polling for its exit, and (with `close-to-tray`) hands
+    it over to the tray — the tray re-opens the browser on restore.
 - dsh exits **cleanly** (exit 0, e.g. its graceful Ctrl+C shutdown) → the
   launcher exits too.
 - after a successful launch, dsh exits **unexpectedly** (non-zero exit code /

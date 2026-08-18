@@ -26,13 +26,14 @@ pub mod assets;
 
 mod bindings;
 mod crash;
+mod exit;
 mod launch;
 mod state;
 mod supervisor;
 mod vfs;
 mod window;
 
+pub use exit::request_shutdown;
 pub use launch::{kill_dsh, launch_flow};
-pub use state::request_shutdown;
 pub use supervisor::run_loop;
 pub use window::setup;

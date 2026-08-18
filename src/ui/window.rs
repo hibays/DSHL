@@ -13,6 +13,7 @@ use webui::webui;
 
 use super::assets;
 use super::bindings;
+use super::exit;
 use super::state;
 use super::vfs;
 use crate::config::{self, UiMode};
@@ -50,6 +51,14 @@ unsafe extern "C" fn on_webview_close(window: usize) -> bool {
         // other platforms have no HWND concept (get_hwnd returns 0) yet
         // still want the close to hand over to the tray.
         if hwnd != 0 || !cfg!(target_os = "windows") {
+            // Stop this window's keep-alive so its webui server can shut down
+            // (the server keeps running while any client is connected). The
+            // window struct itself is freed by the supervisor loop promptly
+            // after this close (see `state::PENDING_DESTROY`), so it is not
+            // held in memory while trayed.
+            if let Some(keepalive) = state::KEEPALIVE.lock().unwrap().take() {
+                keepalive.stop();
+            }
             tray::start();
             tray::hide_to_tray();
             // The window is destroyed below; clear the tracked HWND so the
@@ -57,13 +66,17 @@ unsafe extern "C" fn on_webview_close(window: usize) -> bool {
             // window (which would re-trigger tray mode or shutdown), and
             // enter tray mode right here.
             state::WEBVIEW_HWND.store(0, Ordering::SeqCst);
+            // Defer the webui struct/server cleanup to the supervisor loop
+            // (never call webui_destroy from inside the close handler — it
+            // would free the window while webui is mid-close).
+            state::PENDING_DESTROY.store(window, Ordering::SeqCst);
             state::TRAYED.store(true, Ordering::SeqCst);
             crate::debug::emit("close-to-tray: window closed, dsh keeps running");
             return true;
         }
     }
     remember_window_geometry(window);
-    state::request_shutdown();
+    exit::request_shutdown();
     true
 }
 
@@ -333,15 +346,22 @@ pub fn setup(cli_config_path: Option<PathBuf>) {
         }
     };
 
-    if shown && state::IS_BROWSER.load(Ordering::SeqCst) {
-        capture_browser_pid();
-    } else if shown {
-        // WebView mode: hold a keep-alive WebSocket so the window stays open
-        // after it navigates to dsh (see `wskeep`).
-        let port = window.get_port();
-        crate::debug::emit(&format!("webview server port {port}"));
-        if port != 0 {
-            crate::wskeep::spawn(port as u16);
+    if shown {
+        if state::IS_BROWSER.load(Ordering::SeqCst) {
+            capture_browser_pid();
+        } else {
+            // Hold a keep-alive WebSocket (see `wskeep`) so the window stays
+            // open after navigating to dsh: the navigation disconnects the
+            // embedded WebView from webui's server, and without a live client
+            // webui stops the server and closes the WebView ~1.5s later
+            // (WEBUI_RELOAD_TIMEOUT). Browser mode needs no keep-alive — webui
+            // does not terminate the external browser when its server stops,
+            // and the launcher tracks the browser process directly.
+            let port = window.get_port();
+            crate::debug::emit(&format!("webui server port {port}"));
+            if port != 0 {
+                *state::KEEPALIVE.lock().unwrap() = Some(crate::wskeep::spawn(port as u16));
+            }
         }
     }
     remember_launcher_url();
@@ -362,7 +382,7 @@ pub fn setup(cli_config_path: Option<PathBuf>) {
     state::SETUP_DONE.store(true, Ordering::SeqCst);
     if state::CLOSE_PENDING.swap(false, Ordering::SeqCst) {
         crate::debug::emit("applying deferred close from setup");
-        state::request_shutdown();
+        exit::request_shutdown();
     }
 }
 
@@ -481,11 +501,38 @@ pub(crate) fn capture_webview_hwnd() {
     });
 }
 
+/// Apply the saved window geometry (see the setup-time comment for the
+/// physical-vs-logical pixel difference). The actual backend is known here
+/// (`state::IS_BROWSER`), so external browsers get the DPI-divided values
+/// they interpret in logical pixels, WebView windows get physical pixels.
+fn apply_saved_geometry(window: &webui::Window) {
+    if let Some(saved) = load_window_state() {
+        let (w, h, x, y) = clamp_geometry(&saved);
+        if state::IS_BROWSER.load(Ordering::SeqCst) {
+            let scale = crate::platform::dpi_scale();
+            if scale > 0.0 {
+                window.set_size(
+                    (w as f64 / scale).round() as u32,
+                    (h as f64 / scale).round() as u32,
+                );
+                window.set_position(
+                    (x as f64 / scale).round() as u32,
+                    (y as f64 / scale).round() as u32,
+                );
+                return;
+            }
+        }
+        window.set_size(w, h);
+        window.set_position(x, y);
+    }
+}
+
 /// Re-create the launcher window after it was closed to tray: re-apply the
-/// saved geometry, show the WebView, navigate back to dsh, and re-capture
-/// the HWND. Shared by the tray "restore" menu and single-instance
-/// activation. With `show_launcher` the window shows the startup page instead
-/// of dsh (crash recovery).
+/// saved geometry, show the window (WebView or external browser, matching the
+/// mode), navigate back to dsh, and re-capture the HWND / browser pid. Shared
+/// by the tray "restore" menu and single-instance activation. With
+/// `show_launcher` the window shows the startup page instead of dsh (crash
+/// recovery).
 pub(crate) fn restore_from_tray(show_launcher: bool) {
     // Restore fires only once per request: while the (slow) window rebuild
     // is running, further double-clicks or menu items are ignored. If the
@@ -495,38 +542,86 @@ pub(crate) fn restore_from_tray(show_launcher: bool) {
         return;
     }
     crate::debug::emit("restore window from tray");
-    // webui cannot revive a closed window (show_wv on it hangs/fails), so
+
+    // The previous window's webui resources were already freed by the
+    // supervisor loop when it closed to the tray (PENDING_DESTROY), so the
+    // memory is released at close time rather than held while trayed. Stop any
+    // leftover keep-alive defensively (the close handler normally already did;
+    // this also covers platforms without a close handler).
+    if let Some(keepalive) = state::KEEPALIVE.lock().unwrap().take() {
+        keepalive.stop();
+    }
+
+    // Defer any close that lands while the window is being re-created: letting
+    // webui tear the WebView down mid-`show_wv` deadlocks its own show-wait
+    // loop (same protocol as `setup()`). A close during the rebuild is
+    // honoured below by going back to the tray, so the tray never ends up
+    // unable to summon a dead window.
+    state::CLOSE_PENDING.store(false, Ordering::SeqCst);
+    state::SETUP_DONE.store(false, Ordering::SeqCst);
+
+    // webui cannot revive a closed window (show_wv/show on it hangs/fails), so
     // build a brand-new one and re-apply the theme for its HWND.
     let window = create_window();
-    if let Some(state) = load_window_state() {
-        let (w, h, x, y) = clamp_geometry(&state);
-        window.set_size(w, h);
-        window.set_position(x, y);
-    }
-    if window.show_wv("index.html") {
+    apply_saved_geometry(&window);
+    let browser_mode = state::IS_BROWSER.load(Ordering::SeqCst);
+    let shown = if browser_mode {
+        crate::debug::emit("restore: calling show (browser mode)");
+        window.show("index.html")
+    } else {
+        crate::debug::emit("restore: calling show_wv (webview mode)");
+        window.show_wv("index.html")
+    };
+
+    // With the close handler still deferred, no close could have torn the
+    // WebView down. Build out the fresh window and check whether the user
+    // closed it in the meantime (deferred) before committing to "visible".
+    let mut hwnd = 0usize;
+    let mut keep = shown && !state::CLOSE_PENDING.load(Ordering::SeqCst);
+    if keep {
         if !show_launcher && let Some(url) = progress::snapshot().url {
             window.navigate(&url);
         }
-        // webui closes a WebView ~1.5s after its bridge disconnects (the
-        // WEBUI_RELOAD_TIMEOUT) unless at least one client stays connected.
-        // The startup keep-alive belonged to the old window, so this fresh
-        // window needs its own WebSocket or it vanishes right after
-        // navigating to dsh.
-        let port = window.get_port();
-        if port != 0 {
-            crate::wskeep::spawn(port as u16);
-        }
         // The fresh window has its own server port; record its launcher URL.
         remember_launcher_url();
-        // Capture the new HWND synchronously so the supervisor loop sees a
-        // live handle immediately (the async capture would lag behind and
-        // the stale-zero HWND could look like "no window").
-        let hwnd = window.get_hwnd() as usize;
-        if hwnd != 0 {
-            state::WEBVIEW_HWND.store(hwnd, Ordering::SeqCst);
-            apply_window_theme_async();
+        if browser_mode {
+            // Re-locate the freshly opened browser process so future close
+            // detection works (best-effort, async — the new browser is already
+            // brought to the foreground by webui itself).
+            state::BROWSER_CHECKED.store(false, Ordering::SeqCst);
+            capture_browser_pid();
+        } else {
+            // Capture the new HWND synchronously so the supervisor loop sees a
+            // live handle immediately (the async capture would lag behind and
+            // the stale-zero HWND could look like "no window").
+            hwnd = window.get_hwnd() as usize;
+            if hwnd != 0 {
+                state::WEBVIEW_HWND.store(hwnd, Ordering::SeqCst);
+                apply_window_theme_async();
+            }
         }
+        // A close that landed during the rebuild was deferred; honour it.
+        keep = !state::CLOSE_PENDING.swap(false, Ordering::SeqCst);
+    }
+    if keep {
         state::TRAYED.store(false, Ordering::SeqCst);
+        // Arm normal close handling only once the window is fully ours.
+        state::SETUP_DONE.store(true, Ordering::SeqCst);
+        // A close in the instant between the two stores above was still
+        // deferred (the handler stays deferred until SETUP_DONE flips), so the
+        // WebView is intact; roll back to the tray if the user closed it.
+        keep = !state::CLOSE_PENDING.swap(false, Ordering::SeqCst);
+    }
+
+    if keep {
+        // The fresh window needs its own keep-alive WebSocket (WebView mode
+        // only) or webui closes the WebView ~1.5s after it navigates to dsh.
+        if !browser_mode {
+            let port = window.get_port();
+            if port != 0 {
+                *state::KEEPALIVE.lock().unwrap() = Some(crate::wskeep::spawn(port as u16));
+            }
+        }
         // Window is live again; allow a future restore cycle (close to tray
         // again and double-click once more).
         state::RESTORING.store(false, Ordering::SeqCst);
@@ -537,9 +632,21 @@ pub(crate) fn restore_from_tray(show_launcher: bool) {
         if hwnd != 0 {
             crate::platform::focus_window(hwnd);
         }
-    } else {
-        crate::debug::emit("restore: show_wv failed");
-        // Release the guard so another double-click/menu item can retry.
-        state::RESTORING.store(false, Ordering::SeqCst);
+        return;
     }
+
+    // The rebuild did not produce a window that should stay open: `show_wv`
+    // failed, or the user closed it during the rebuild (deferred above). Free
+    // the fresh window and go back to the tray so the next restore builds a
+    // clean one.
+    crate::debug::emit("restore: window not kept (failed or closed during rebuild)");
+    // Free the fresh window's webui resources (struct/server/port) — it was
+    // allocated by `create_window` even when `show_wv` failed.
+    webui::destroy(window.id);
+    state::WINDOW_ID.store(0, Ordering::SeqCst);
+    state::WEBVIEW_HWND.store(0, Ordering::SeqCst);
+    state::BROWSER_PID.store(0, Ordering::SeqCst);
+    state::TRAYED.store(true, Ordering::SeqCst);
+    state::SETUP_DONE.store(true, Ordering::SeqCst);
+    state::RESTORING.store(false, Ordering::SeqCst);
 }

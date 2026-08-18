@@ -6,7 +6,7 @@
 //! other's privates, only through these statics and the few accessor fns.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize};
 use std::sync::{LazyLock, Mutex};
 
 /// webui window id of the current launcher window (0 until created).
@@ -44,6 +44,16 @@ pub(crate) static TRAYED: AtomicBool = AtomicBool::new(false);
 /// double-click or menu item during the slow rebuild does not stack
 /// requests.
 pub(crate) static RESTORING: AtomicBool = AtomicBool::new(false);
+/// The current window's keep-alive WebSocket handle (WebView mode only; see
+/// [`crate::wskeep`]). Stopped (and dropped) when the window closes to the
+/// tray so its webui server can shut down; replaced on each window
+/// re-creation.
+pub(crate) static KEEPALIVE: Mutex<Option<crate::wskeep::KeepAlive>> = Mutex::new(None);
+/// webui window id whose resources the supervisor should free (0 = none).
+/// Set when a window closes to the tray so its (large) struct + server + port
+/// are freed promptly at close time instead of being held while trayed and
+/// freed only on the next restore; consumed by the supervisor loop.
+pub(crate) static PENDING_DESTROY: AtomicUsize = AtomicUsize::new(0);
 /// Launcher page URL (`http://localhost:<port>/index.html`), captured when a
 /// window is created; the crash recovery navigates back to it.
 pub(crate) static LAUNCHER_URL: LazyLock<Mutex<String>> =
@@ -70,8 +80,3 @@ pub(crate) static CONFIG_PATH: LazyLock<Mutex<Option<PathBuf>>> =
 /// PID of a stale dsh that did not exit on Ctrl+C and is awaiting the user's
 /// explicit confirmation before being force-killed (0 = none).
 pub(crate) static STALE_PID: AtomicU32 = AtomicU32::new(0);
-
-/// Ask the launcher to shut down (SIGINT/SIGTERM handler, close handler).
-pub fn request_shutdown() {
-    SHUTDOWN_REQUESTED.store(true, Ordering::SeqCst);
-}

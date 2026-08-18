@@ -1,20 +1,54 @@
 //! A minimal WebSocket keep-alive client.
 //!
-//! webui closes an embedded WebView ~1.5s after its bridge disconnects
-//! (`WEBUI_RELOAD_TIMEOUT`), which happens whenever the WebView navigates to
-//! an external URL (dsh). The launcher holds a raw WebSocket to its own webui
-//! server so `clients_count` stays above zero, keeping the window open while
-//! dsh is shown. Requires `multi_client` and `use_cookies` disabled (see
+//! webui keeps a window's server alive only while at least one client stays
+//! connected. In WebView mode, navigating the window to dsh disconnects the
+//! embedded WebView's bridge from webui's server — and without a client webui
+//! stops the server ~1.5s later (`WEBUI_RELOAD_TIMEOUT`) and closes the
+//! WebView. The launcher holds a raw WebSocket to its own webui server so
+//! `clients_count` stays above zero, keeping the window open while dsh is
+//! shown. Requires `multi_client` and `use_cookies` disabled (see
 //! [`crate::ui::setup`]).
+//!
+//! Browser mode needs no keep-alive: webui's server-timeout path tries to
+//! terminate the *external* browser process, but that lookup (`wmic` /
+//! PowerShell command-line match) is best-effort and does not fire on modern
+//! Windows/Edge, so the browser stays open on its own and the launcher tracks
+//! its process directly instead.
 
 use base64::Engine;
 use std::io::{Read, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
+/// Handle to a keep-alive WebSocket thread.
+///
+/// The thread holds the `Arc`, so dropping the handle does not stop it (it
+/// lives for the process lifetime, as intended). Call [`KeepAlive::stop`] to
+/// close the connection — e.g. when the window closes to the tray, so the old
+/// window's webui server can shut down instead of staying alive on the
+/// keep-alive client.
+pub struct KeepAlive {
+    stop: Arc<AtomicBool>,
+}
+
+impl KeepAlive {
+    /// Ask the keep-alive thread to close its WebSocket connection. The
+    /// thread notices on its next poll (≤200ms) and drops the socket.
+    pub fn stop(&self) {
+        self.stop.store(true, Ordering::SeqCst);
+    }
+}
+
 /// Open a WebSocket to the launcher's own webui server on `port` and hold it
-/// open (reading/discarding frames) until the process exits.
-pub fn spawn(port: u16) {
+/// open (reading/discarding frames) until the process exits or the returned
+/// handle is stopped.
+pub fn spawn(port: u16) -> KeepAlive {
+    let keepalive = KeepAlive {
+        stop: Arc::new(AtomicBool::new(false)),
+    };
+    let stop = keepalive.stop.clone();
     std::thread::spawn(move || {
         let addr = format!("127.0.0.1:{port}");
         crate::debug::emit(&format!("keep-alive: connecting to {addr}"));
@@ -70,16 +104,25 @@ pub fn spawn(port: u16) {
 
         crate::debug::emit(&format!("keep-alive websocket established (port {port})"));
 
-        // Clear the handshake read timeout; hold the connection open
-        // indefinitely and read/discard any frames.
-        let _ = stream.set_read_timeout(None);
+        // Poll with a short read timeout so a stop request is noticed quickly
+        // and the socket is dropped, letting the old window's webui server
+        // shut down (it keeps running while any client is connected).
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
         loop {
-            let mut buf = [0u8; 1024];
+            if stop.load(Ordering::SeqCst) {
+                crate::debug::emit(&format!("keep-alive: stop requested (port {port})"));
+                return;
+            }
             match stream.read(&mut buf) {
                 Ok(0) => {
                     crate::debug::emit("keep-alive: server closed the connection");
                     return;
                 }
+                Err(e)
+                    if matches!(
+                        e.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
+                    ) => {}
                 Err(e) => {
                     crate::debug::emit(&format!("keep-alive: read error: {e}"));
                     return;
@@ -88,4 +131,5 @@ pub fn spawn(port: u16) {
             }
         }
     });
+    keepalive
 }

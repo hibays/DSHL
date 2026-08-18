@@ -6,13 +6,14 @@ use std::sync::atomic::Ordering;
 
 use webui::webui;
 
-use super::launch::kill_dsh;
+use super::exit;
 use super::state;
 use super::window;
 use crate::progress;
 use crate::tray;
 
-/// Run the webui event loop until shutdown, then clean up dsh and webui.
+/// Run the webui event loop until shutdown, then run the composed teardown
+/// ([`exit::shutdown`]) to clean up dsh and webui.
 pub fn run_loop() {
     crate::debug::emit("run_loop: started");
 
@@ -24,8 +25,13 @@ pub fn run_loop() {
         tray::start();
     }
 
+    // The last `webui::wait_async()` result; passed to `exit::shutdown` so it
+    // only signals webui (webui::exit) when there is still something to tear
+    // down (when the window already closed on its own, `wait_async()` returns
+    // false and the idempotent `webui::clean()` finalises the teardown).
+    let mut alive;
     loop {
-        let alive = webui::wait_async();
+        alive = webui::wait_async();
 
         // Success path: the supervisor finished (dsh exited) or an explicit
         // exit was requested.
@@ -36,23 +42,36 @@ pub fn run_loop() {
         // Ctrl+C / SIGTERM / WebView window close.
         if state::SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
             crate::debug::emit(&format!("run_loop: shutdown requested (alive={alive})"));
-            kill_dsh();
-            // Only stop the webui loop explicitly when the window is still up
-            // (e.g. Ctrl+C in a console build). When the window already
-            // closed, `wait_async()` above has already cleaned up the loop,
-            // and calling `webui::exit()` again could touch freed WebView
-            // state.
-            if alive {
-                crate::debug::emit("run_loop: calling webui::exit()");
-                webui::exit();
-                crate::debug::emit("run_loop: webui::exit() returned");
-            }
             break;
         }
         // Tray menu "quit": go through the normal clean shutdown path.
         if tray::quit_requested() {
             crate::debug::emit("run_loop: tray quit requested");
-            state::request_shutdown();
+            exit::request_shutdown();
+        }
+
+        // Free a window that was closed to the tray promptly, instead of
+        // holding its (large) webui struct + server + port while trayed and
+        // freeing it only on the next restore. Set by the WebView close
+        // handler, the win-gone branch or the browser-close branch; destroy
+        // runs here on the main thread (webui is main-thread oriented). Never
+        // free a window webui still reports as shown/connected (the WebView
+        // may be mid-teardown right after the close handler); retry next pass.
+        let pending_destroy = state::PENDING_DESTROY.swap(0, Ordering::SeqCst);
+        if pending_destroy != 0 {
+            if webui::is_shown(pending_destroy) {
+                state::PENDING_DESTROY.store(pending_destroy, Ordering::SeqCst);
+            } else {
+                crate::debug::emit(&format!(
+                    "run_loop: freeing closed window id {pending_destroy}"
+                ));
+                webui::destroy(pending_destroy);
+                // Only clear WINDOW_ID if it still refers to the window we
+                // destroyed (a restore in the meantime creates a newer one).
+                if state::WINDOW_ID.load(Ordering::SeqCst) == pending_destroy {
+                    state::WINDOW_ID.store(0, Ordering::SeqCst);
+                }
+            }
         }
 
         // Crash recovery: dsh exited unexpectedly. Navigate the window back
@@ -87,6 +106,8 @@ pub fn run_loop() {
         if state::LAUNCHED.load(Ordering::SeqCst) {
             if state::IS_BROWSER.load(Ordering::SeqCst) {
                 // Browser mode: track the external browser process. Closing it
+                // either hands over to the tray (close-to-tray, dsh keeps
+                // running and the tray re-opens the browser on restore) or
                 // shuts down and reaps dsh.
                 let pid = state::BROWSER_PID.load(Ordering::SeqCst);
                 if pid != 0 {
@@ -97,8 +118,24 @@ pub fn run_loop() {
                         ));
                     }
                     if !crate::platform::process_alive(pid as u32) {
-                        crate::debug::emit("browser window closed; shutting down");
-                        state::request_shutdown();
+                        if state::CLOSE_TO_TRAY.load(Ordering::SeqCst) {
+                            // Browser mode has no WebView close handler to
+                            // hand the close over to the tray, so this branch
+                            // is it: keep dsh running, free the (now idle)
+                            // webui window, and let the tray re-open the
+                            // browser on restore.
+                            crate::debug::emit(
+                                "close-to-tray: browser window closed, dsh keeps running",
+                            );
+                            state::PENDING_DESTROY
+                                .store(state::WINDOW_ID.load(Ordering::SeqCst), Ordering::SeqCst);
+                            state::BROWSER_PID.store(0, Ordering::SeqCst);
+                            state::BROWSER_CHECKED.store(false, Ordering::SeqCst);
+                            state::TRAYED.store(true, Ordering::SeqCst);
+                        } else {
+                            crate::debug::emit("browser window closed; shutting down");
+                            exit::request_shutdown();
+                        }
                     }
                 }
             } else {
@@ -118,10 +155,20 @@ pub fn run_loop() {
                         // / macOS, or the window died another way): keep dsh
                         // running.
                         crate::debug::emit("close-to-tray: window gone, dsh keeps running");
+                        // Stop the window's keep-alive so its webui server can
+                        // shut down (this branch covers platforms without a
+                        // WebView close handler, or a window that died another
+                        // way) and let the supervisor free the window struct.
+                        if let Some(keepalive) = state::KEEPALIVE.lock().unwrap().take() {
+                            keepalive.stop();
+                        }
+                        state::PENDING_DESTROY
+                            .store(state::WINDOW_ID.load(Ordering::SeqCst), Ordering::SeqCst);
+                        state::WEBVIEW_HWND.store(0, Ordering::SeqCst);
                         state::TRAYED.store(true, Ordering::SeqCst);
                     } else {
                         crate::debug::emit("webview window closed; shutting down");
-                        state::request_shutdown();
+                        exit::request_shutdown();
                     }
                 }
             }
@@ -164,10 +211,9 @@ pub fn run_loop() {
         std::thread::sleep(std::time::Duration::from_millis(50));
     }
 
-    tray::shutdown();
-    crate::debug::emit("run_loop: calling webui::clean()");
-    webui::clean();
-    crate::debug::emit("run_loop: webui::clean() returned");
-    kill_dsh();
+    // Composed, cross-platform teardown (see `exit`): stop the keep-alive,
+    // webui::exit() to close the window/servers (only when webui is still
+    // running), tray shutdown, graceful dsh stop, then webui::clean().
+    exit::shutdown(alive);
     crate::debug::emit("run_loop: exiting");
 }

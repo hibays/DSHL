@@ -39,8 +39,16 @@ fn thread_waker() -> Waker {
 
     unsafe fn clone_fn(data: *const ()) -> RawWaker {
         // SAFETY: `data` is a valid `Arc<Thread>` created by `thread_waker`.
-        let arc = unsafe { Arc::from_raw(data as *const std::thread::Thread) };
-        std::mem::forget(arc.clone());
+        //
+        // The input waker's reference must be leaked (kept alive) while a NEW
+        // independent reference is added for the clone. Dropping the
+        // `from_raw`'d Arc instead would *transfer* the reference, letting the
+        // very first wake() from another thread free the `Arc<Thread>` while
+        // the executor still holds its waker — a use-after-free.
+        let arc = unsafe {
+            std::mem::ManuallyDrop::new(Arc::from_raw(data as *const std::thread::Thread))
+        };
+        std::mem::forget(Arc::clone(&arc));
         RawWaker::new(data, &VTABLE)
     }
     unsafe fn wake_fn(data: *const ()) {
