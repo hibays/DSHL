@@ -150,9 +150,9 @@ pub fn start() {
             }
 
             let menu = gtk_menu_new();
-            let restore = std::ffi::CString::new(t!("tray.restore")).unwrap();
-            let open_dsh = std::ffi::CString::new(t!("tray.open_dsh")).unwrap();
-            let quit = std::ffi::CString::new(t!("tray.quit")).unwrap();
+            let restore = std::ffi::CString::new(t!("tray.restore").as_bytes()).unwrap();
+            let open_dsh = std::ffi::CString::new(t!("tray.open_dsh").as_bytes()).unwrap();
+            let quit = std::ffi::CString::new(t!("tray.quit").as_bytes()).unwrap();
             let restore_item = gtk_menu_item_new_with_label(restore.as_ptr());
             let open_dsh_item = gtk_menu_item_new_with_label(open_dsh.as_ptr());
             let quit_item = gtk_menu_item_new_with_label(quit.as_ptr());
