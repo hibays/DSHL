@@ -31,7 +31,7 @@ pub async fn ensure_pnpm(
         return Ok(Vec::new());
     }
 
-    let pnpm = probe::pnpm();
+    let pnpm = probe::pnpm().await;
     if pnpm.found {
         match pnpm.version {
             Some(v) => progress::log(t!("install.pnpm.satisfies", v = v)),
@@ -61,7 +61,7 @@ pub async fn ensure_pnpm(
         run_streaming(cmd, "npm i -g pnpm").await?;
     }
 
-    Ok(pnpm_bin_dirs(node_dir))
+    Ok(pnpm_bin_dirs(node_dir).await)
 }
 
 /// Resolve pnpm's global bin directory (where `pnpm add -g` links bins).
@@ -71,7 +71,7 @@ pub async fn ensure_pnpm(
 /// configured path. Fallback chain: printed line → path quoted in the error
 /// → platform default. Directories that do not exist yet are created so a
 /// freshly installed pnpm is findable right after the first `add -g`.
-fn pnpm_bin_dirs(node_dir: &Path) -> Vec<PathBuf> {
+async fn pnpm_bin_dirs(node_dir: &Path) -> Vec<PathBuf> {
     let rt = Runtime {
         node_dir: Some(node_dir.to_path_buf()),
         bun_dir: None,
@@ -80,7 +80,8 @@ fn pnpm_bin_dirs(node_dir: &Path) -> Vec<PathBuf> {
     let mut cmd = Command::new(platform::tool("pnpm"));
     cmd.args(["bin", "-g"]);
     cmd.env("PATH", rt.augmented_path());
-    let text = process::run(&mut cmd)
+    let text = process::run_async(&mut cmd)
+        .await
         .map(|res| format!("{}{}", res.stdout, res.stderr))
         .unwrap_or_default();
 

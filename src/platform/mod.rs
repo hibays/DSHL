@@ -28,7 +28,7 @@ pub mod single_instance;
 pub mod theme;
 pub mod window;
 
-pub use actions::{open_path, open_url};
+pub use actions::{open_path, open_terminal, open_url};
 pub use detect::{Arch, Os, Shell, arch, arch_name, os, os_name, shell, shell_command};
 pub use dpi::{dpi_scale, dpi_scale_for_window, make_dpi_aware, screen_size};
 pub use paths::{

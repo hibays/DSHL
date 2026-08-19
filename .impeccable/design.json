@@ -1,0 +1,128 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-08-17T00:00:00Z",
+  "title": "Design System: DSHL",
+  "extensions": {
+    "colorMeta": {
+      "ultramarine": { "role": "primary", "displayName": "Ultramarine", "canonical": "#2f6fe4", "tonalRamp": ["#0e2a63", "#16428f", "#1f57bc", "#2f6fe4", "#4f88ec", "#7aa8f2", "#abc8f8", "#e0ecfd"] },
+      "ultramarine-strong": { "role": "primary", "displayName": "Ultramarine Strong", "canonical": "#2258c4", "tonalRamp": ["#0a1e4a", "#10306e", "#174495", "#2258c4", "#3f70d8", "#6b92e6", "#a0b9f2", "#dce7fc"] },
+      "ultramarine-soft": { "role": "primary", "displayName": "Ultramarine Soft", "canonical": "#2457c4", "darkValue": "#8aaaf7", "tonalRamp": ["#0a1e4a", "#10306e", "#174495", "#2457c4", "#3f70d8", "#6b92e6", "#a0b9f2", "#dce7fc"] },
+      "ultramarine-faint": { "role": "primary", "displayName": "Ultramarine Faint", "canonical": "#c1d4f7", "darkValue": "#1c2e51", "tonalRamp": ["#0a1223", "#14203f", "#1c2e51", "#46639a", "#7b9ad0", "#aac6f2", "#c1d4f7", "#e2ecfc"] },
+      "ground": { "role": "neutral", "displayName": "Ground", "canonical": "#ffffff", "darkValue": "#0f0f11", "tonalRamp": ["#0f0f11", "#3a3a3f", "#6a6a72", "#9c9ca4", "#c9c9cd", "#e8e8e9", "#f6f6f6", "#ffffff"] },
+      "surface": { "role": "neutral", "displayName": "Surface", "canonical": "#f6f6f4", "darkValue": "#1a1a1d", "tonalRamp": ["#111113", "#1a1a1d", "#3a3a3c", "#6a6a6b", "#a4a4a4", "#cfcfcd", "#ececeb", "#ffffff"] },
+      "ink": { "role": "neutral", "displayName": "Ink", "canonical": "#161616", "darkValue": "#f0f0f1", "tonalRamp": ["#0c0c0d", "#161616", "#343436", "#55555a", "#797980", "#a0a0a6", "#c8c8cc", "#f0f0f1"] },
+      "muted": { "role": "neutral", "displayName": "Muted", "canonical": "#5f5f66", "darkValue": "#9c9ca4", "tonalRamp": ["#1e1e21", "#343438", "#4b4b51", "#5f5f66", "#7d7d85", "#9c9ca4", "#c2c2c8", "#e7e7ea"] },
+      "hairline": { "role": "neutral", "displayName": "Hairline", "canonical": "#e5e5e2", "darkValue": "#2e2e33", "tonalRamp": ["#2e2e33", "#4c4c52", "#6f6f74", "#939398", "#b8b8bb", "#d6d6d5", "#eeeeec", "#ffffff"] },
+      "signal-ok": { "role": "secondary", "displayName": "Signal Green", "canonical": "#0b7c4e", "darkValue": "#3ccb8b", "tonalRamp": ["#043820", "#065a32", "#086b3d", "#0b7c4e", "#1da062", "#3ccb8b", "#7adcb2", "#c8f5e2"] },
+      "signal-warn": { "role": "secondary", "displayName": "Signal Amber", "canonical": "#a8620a", "darkValue": "#e2a03a", "tonalRamp": ["#3d2302", "#6b3e05", "#8d5108", "#a8620a", "#c9831d", "#e2a03a", "#f0c27d", "#fae8c4"] },
+      "signal-err": { "role": "secondary", "displayName": "Signal Red", "canonical": "#c6352e", "darkValue": "#f06a6a", "tonalRamp": ["#4a0f0c", "#771a15", "#9f2621", "#c6352e", "#dd5b55", "#f06a6a", "#f6a8a5", "#fde4e2"] },
+      "fill-ink": { "role": "neutral", "displayName": "Fill Ink", "canonical": "#ffffff", "darkValue": "#0f0f11", "tonalRamp": ["#0f0f11", "#3a3a3f", "#6a6a72", "#9c9ca4", "#c9c9cd", "#e8e8e9", "#f6f6f6", "#ffffff"] }
+    },
+    "typographyMeta": {
+      "display": { "displayName": "Display", "purpose": "DSHL wordmark only." },
+      "title": { "displayName": "Title", "purpose": "Section labels, uppercase, tracked, muted." },
+      "label": { "displayName": "Label", "purpose": "Buttons and the status stamp, uppercase." },
+      "data": { "displayName": "Data", "purpose": "Mono register for the log, config, paths." }
+    },
+    "shadows": [],
+    "motion": [
+      { "name": "log-cursor", "value": "animation: cursor 1.1s steps(2, start) infinite; @keyframes cursor { 50% { opacity: 0.15; } }", "purpose": "The pulsing block cursor at the end of the live log." },
+      { "name": "running-pulse", "value": ".dot.running::before { animation: core 0.69s ease-in-out infinite; } @keyframes core { 0%,100% { transform: scale(0.9); background-color: var(--accent); } 30% { transform: scale(1.5); background-color: var(--accent-faint); } }", "purpose": "One modest swell on the running step: the core rises over the first third of the cycle (0.9x to 1.5x, accent to faint), then eases back. Speed is 1.6x the log cursor's blink (cursor 1.1s to core ~0.69s)." },
+      { "name": "led-pulse", "value": "body.running .status::before { animation: pulse 2s ease-in-out infinite; }", "purpose": "The header status LED breathes only while the launch is in progress (body.running)." }
+    ],
+    "breakpoints": [
+      { "name": "sm", "value": "720px" }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "Ultramarine-filled primary action; darkens on hover/press.",
+      "html": "<button class=\"ds-btn-primary\">跳转</button>",
+      "css": ".ds-btn-primary { background: #2f6fe4; color: #fff; border: 1px solid #2f6fe4; padding: 10px 18px; border-radius: 0; font-family: 'Inter','Segoe UI',system-ui,sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; } .ds-btn-primary:hover { background: #2258c4; border-color: #2258c4; } .ds-btn-primary:active { transform: translateY(1px); } .ds-btn-primary:focus-visible { outline: 2px solid #2f6fe4; outline-offset: 2px; }"
+    },
+    {
+      "name": "Default Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Ghost button: transparent, hairline border, ink text; fills on hover.",
+      "html": "<button class=\"ds-btn\">重试</button>",
+      "css": ".ds-btn { background: transparent; color: #161616; border: 1px solid #e5e5e2; padding: 10px 18px; border-radius: 0; font-family: 'Inter','Segoe UI',system-ui,sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; transition: background-color .15s ease-out, border-color .15s ease-out; } .ds-btn:hover { background: #f6f6f4; border-color: #161616; } .ds-btn:active { transform: translateY(1px); } .ds-btn:focus-visible { outline: 2px solid #2f6fe4; outline-offset: 2px; }"
+    },
+    {
+      "name": "Danger Button",
+      "kind": "button",
+      "refersTo": "button-danger",
+      "description": "Ghost danger: red hairline and text; fills red on hover.",
+      "html": "<button class=\"ds-btn-danger\">退出</button>",
+      "css": ".ds-btn-danger { background: transparent; color: #c6352e; border: 1px solid #c6352e; padding: 10px 18px; border-radius: 0; font-family: 'Inter','Segoe UI',system-ui,sans-serif; font-size: 12px; font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; cursor: pointer; } .ds-btn-danger:hover { background: #c6352e; color: #fff; } .ds-btn-danger:active { transform: translateY(1px); }"
+    },
+    {
+      "name": "Status Stamp",
+      "kind": "chip",
+      "refersTo": "status-stamp",
+      "description": "Uppercase status note with an 8px currentColor square.",
+      "html": "<div class=\"ds-status\">启动中…</div>",
+      "css": ".ds-status { display: flex; align-items: center; gap: 9px; font-family: 'Inter','Segoe UI',system-ui,sans-serif; font-size: 11px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: #2457c4; } .ds-status::before { content: ''; width: 8px; height: 8px; background: currentColor; }"
+    },
+    {
+      "name": "Step Row",
+      "kind": "custom",
+      "refersTo": "steps",
+      "description": "Ruled checklist row: a double-layer square indicator (pending: two empty outlines; running: the inner core swells and pales — size + colour — inside the static accent ring; done: filled green with a theme-aware check; error: filled red with a cross; skipped: dimmed + struck title) + title + message.",
+      "html": "<ol class=\"ds-steps\"><li><span class=\"ds-dot done\"></span><div><div class=\"ds-t\">启动 dsh</div><div class=\"ds-m\">正在启动…</div></div></li></ol>",
+      "css": ".ds-steps { list-style: none; margin: 0; padding: 0; } .ds-steps li { display: grid; grid-template-columns: 24px minmax(0,1fr); column-gap: 12px; align-items: center; padding: 13px 0; border-top: 1px solid #e5e5e2; } .ds-steps li:first-child { border-top: none; } .ds-dot { position: relative; width: 18px; height: 18px; display: grid; place-items: center; border: 1px solid #e5e5e2; } .ds-dot::before { content: ''; width: 8px; height: 8px; border: 1px solid #5f5f66; } .ds-dot.running { border-color: #2f6fe4; } .ds-dot.running::before { border: none; background: #2f6fe4; } .ds-dot.done { background: #0b7c4e; border-color: #0b7c4e; } .ds-dot.done::before { width: 9px; height: 5px; border: none; border-left: 2px solid var(--fill-ink); border-bottom: 2px solid var(--fill-ink); transform: rotate(-45deg) translate(-1px,-1px); } .ds-dot.error { background: #c6352e; border-color: #c6352e; } .ds-dot.error::before, .ds-dot.error::after { position: absolute; top: 50%; left: 50%; content: ''; width: 11px; height: 2px; border: none; background: var(--fill-ink); } .ds-dot.error::before { transform: translate(-50%,-50%) rotate(45deg); } .ds-dot.error::after { transform: translate(-50%,-50%) rotate(-45deg); } .ds-t { font-size: 14px; font-weight: 500; } .ds-m { margin-top: 3px; font-size: 12px; color: #5f5f66; }"
+    },
+    {
+      "name": "Config Table",
+      "kind": "custom",
+      "refersTo": "config",
+      "description": "Two-column ruled table: muted mono keys, accent-soft mono values.",
+      "html": "<div class=\"ds-kv\"><div class=\"ds-k\">dsh.mode</div><div class=\"ds-v\">webview</div></div>",
+      "css": ".ds-kv { display: grid; grid-template-columns: 9em 1fr; column-gap: 16px; font-size: 13px; } .ds-kv .ds-k, .ds-kv .ds-v { padding: 8px 0; border-bottom: 1px solid #e5e5e2; font-variant-numeric: tabular-nums; } .ds-kv .ds-k { font-size: 12px; font-weight: 500; color: #5f5f66; } .ds-kv .ds-v { color: #2457c4; word-break: break-all; }"
+    },
+    {
+      "name": "Terminal Log",
+      "kind": "custom",
+      "refersTo": "log",
+      "description": "Surface panel with mono text and the pulsing ultramarine block cursor. Pinned to the end while the user is at the bottom; stays put once they scroll up.",
+      "html": "<pre class=\"ds-log\">[info] fnm: Node v22.0.0 found</pre>",
+      "css": ".ds-log { margin: 0; padding: 16px 18px; max-height: 185px; overflow-y: auto; background: #f6f6f4; border: 1px solid #e5e5e2; scrollbar-width: thin; scrollbar-color: #e5e5e2 transparent; font-family: 'JetBrains Mono','Cascadia Code',Consolas,monospace; font-size: 12px; line-height: 1.65; color: #161616; white-space: pre-wrap; } .ds-log::after { content: ''; display: inline-block; width: 7px; height: 14px; margin-left: 5px; vertical-align: text-bottom; background: #2f6fe4; animation: ds-cur 1.1s steps(2,start) infinite; } @keyframes ds-cur { 50% { opacity: 0.15; } }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Ruled Control Panel",
+    "overview": "DSHL is the launch console of a developer tool rendered in the Swiss International tradition: calm, objective, and ruled by the grid. It refuses both the decorated product dashboard and its own previous heavy brutalism. There is no decoration to admire — only measured type on a clean ground, hairline rules that hold content in place, one ultramarine accent that says this is the live thing, and a checklist that reads like a stamped sequence. The page has no fixed mood: it follows the operating system. On a white ground it is a printed program card; on a near-black ground it is a darkroom control panel. Status green, amber, and red are functional signals, never decoration.",
+    "keyCharacteristics": [
+      "One accent. Ultramarine (#2F6FE4) marks the primary action, the running state, and key values; green/amber/red report status.",
+      "The grid does the work: hairline rules (1px), tracked uppercase section labels, tabular numerals, generous whitespace.",
+      "Square corners, no shadows, no gradients — flat Swiss paint.",
+      "The display voice is the self-hosted Inter grotesque.",
+      "Light and dark are both authored, not defaulted — the page follows the OS via prefers-color-scheme.",
+      "One authored calm motion set reserved for live states: the log cursor blinks, and the running step core plus the status LED breathe while the launch is in progress."
+    ],
+    "rules": [
+      { "name": "The One Accent Rule", "body": "Ultramarine is the only hue. Green, amber, and red exist solely as status signals; any other chromatic color breaks the instrument.", "section": "colors" },
+      { "name": "The Theme Rule", "body": "Light and dark are both designed, never inherited. The page follows the OS through prefers-color-scheme; it never offers its own toggle.", "section": "colors" },
+      { "name": "The Mono-For-Data Rule", "body": "Monospace appears only where code or machine output is shown — the log. Everything else speaks in the grotesque; mono headings would be costume.", "section": "typography" }
+    ],
+    "dos": [
+      "Do build structure with 1px hairlines and whitespace; the grid is the design.",
+      "Do spend ultramarine only on the primary action, the running state, and key values.",
+      "Do author both light and dark grounds and let the OS choose.",
+      "Do use square corners, tabular numerals, and tracked uppercase labels.",
+      "Do keep the self-hosted Inter as the voice; reserve mono for the log.",
+      "Do let the log follow the user: pinned to the end until they scroll up."
+    ],
+    "donts": [
+      "Don't use shadows, gradients, rounded corners, or glows.",
+      "Don't add a second accent hue; keep green/amber/red purely functional.",
+      "Don't use a system sans as the display voice.",
+      "Don't use glyph icons or emoji; carry status with the double-layer square, checks, and crosses.",
+      "Don't reserve a fixed placeholder for the action bar; measure its real height.",
+      "Don't add motion beyond the three live signals — the log cursor, the running step's breathing core, and the status LED while launching."
+    ]
+  }
+}

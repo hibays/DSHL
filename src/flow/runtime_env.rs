@@ -7,6 +7,7 @@ use crate::install::{self, Runtime};
 use crate::mirror::MirrorConfig;
 use crate::probe::{self, Tool};
 use crate::progress::{self, StepStatus};
+use crate::runtime;
 
 fn describe(t: &Tool) -> String {
     if !t.found {
@@ -29,31 +30,38 @@ pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Runtime> {
     progress::step("runtime", StepStatus::Running, t!("flow.runtime.probing"));
 
     // Report the whole toolchain first (transparency). Each probe spawns a
-    // child process (pnpm --version alone takes ~0.5s), so they run in
-    // parallel — serially they would add ~1-2s to every startup. pnpm is
-    // only probed when the config actually asks for it.
-    type Probe = (&'static str, fn() -> Tool);
-    let probes: Vec<Probe> = vec![
-        ("node", probe::node),
-        ("bun", probe::bun),
-        ("fnm", probe::fnm),
-        ("cargo", probe::cargo),
-        ("nvm", probe::nvm),
-    ];
-    let mut all_probes = probes;
+    // child process (pnpm --version alone takes ~0.5s), so they run
+    // concurrently on the tokio runtime — serially they would add ~1-2s to
+    // every startup. pnpm is only probed when the config actually asks for it.
+    let mut names: Vec<&'static str> = vec!["node", "bun", "fnm", "cargo", "nvm"];
     if config.dsh.needs_pnpm() {
-        all_probes.push(("pnpm", probe::pnpm));
+        names.push("pnpm");
     }
+    let mut handles: Vec<(&'static str, _)> = Vec::new();
+    for name in names {
+        let handle = match name {
+            "node" => runtime::spawn(probe::node()),
+            "bun" => runtime::spawn(probe::bun()),
+            "fnm" => runtime::spawn(probe::fnm()),
+            "cargo" => runtime::spawn(probe::cargo()),
+            "nvm" => runtime::spawn(probe::nvm()),
+            "pnpm" => runtime::spawn(probe::pnpm()),
+            _ => unreachable!(),
+        };
+        handles.push((name, handle));
+    }
+    let missing = |name: &'static str| Tool {
+        name,
+        found: false,
+        path: None,
+        version: None,
+        raw: String::new(),
+    };
     let order = ["node", "bun", "pnpm", "fnm", "cargo", "nvm"];
-    let (tx, rx) = std::sync::mpsc::channel();
-    for (name, probe_fn) in all_probes {
-        let tx = tx.clone();
-        std::thread::spawn(move || {
-            let _ = tx.send((name, probe_fn()));
-        });
+    let mut tools: Vec<(&'static str, Tool)> = Vec::with_capacity(handles.len());
+    for (name, handle) in handles {
+        tools.push((name, handle.await.unwrap_or_else(|_| missing(name))));
     }
-    drop(tx);
-    let mut tools: Vec<(&'static str, Tool)> = rx.iter().collect();
     tools.sort_by_key(|(name, _)| order.iter().position(|o| o == name).unwrap_or(99));
     for (name, tool) in tools {
         progress::log(format!("{name:<5}: {}", describe(&tool)));

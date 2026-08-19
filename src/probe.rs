@@ -41,20 +41,20 @@ impl Tool {
     }
 }
 
-fn probe_cmd(name: &'static str, version_args: &[&str]) -> Tool {
-    probe_cmd_in(name, version_args, &[])
+async fn probe_cmd(name: &'static str, version_args: &[&str]) -> Tool {
+    probe_cmd_in(name, version_args, &[]).await
 }
 
 /// Like `probe_cmd`, but searches `extra_dirs` first (plus the normal
 /// locations), so tools that an earlier flow step installed (fnm's node, a
 /// fresh pnpm, …) are found even when they are not on the ambient `PATH`.
-fn probe_cmd_in(name: &'static str, version_args: &[&str], extra_dirs: &[PathBuf]) -> Tool {
+async fn probe_cmd_in(name: &'static str, version_args: &[&str], extra_dirs: &[PathBuf]) -> Tool {
     let Some(path) = platform::which_in(name, extra_dirs) else {
         return Tool::missing(name);
     };
     let mut cmd = Command::new(&path);
     cmd.args(version_args);
-    match process::run(&mut cmd) {
+    match process::run_async(&mut cmd).await {
         Ok(res) => {
             let raw = format!("{}{}", res.stdout.trim(), res.stderr.trim());
             Tool::found(name, path, raw)
@@ -69,47 +69,47 @@ fn probe_cmd_in(name: &'static str, version_args: &[&str], extra_dirs: &[PathBuf
     }
 }
 
-pub fn node() -> Tool {
-    probe_cmd("node", &["--version"])
+pub async fn node() -> Tool {
+    probe_cmd("node", &["--version"]).await
 }
 
-pub fn bun() -> Tool {
-    probe_cmd("bun", &["--version"])
+pub async fn bun() -> Tool {
+    probe_cmd("bun", &["--version"]).await
 }
 
-pub fn pnpm() -> Tool {
-    probe_cmd("pnpm", &["--version"])
+pub async fn pnpm() -> Tool {
+    probe_cmd("pnpm", &["--version"]).await
 }
 
-pub fn fnm() -> Tool {
-    probe_cmd("fnm", &["--version"])
+pub async fn fnm() -> Tool {
+    probe_cmd("fnm", &["--version"]).await
 }
 
-pub fn cargo() -> Tool {
-    probe_cmd("cargo", &["--version"])
+pub async fn cargo() -> Tool {
+    probe_cmd("cargo", &["--version"]).await
 }
 
-pub fn dsh() -> Tool {
-    probe_cmd("dsh", &["--version"])
+pub async fn dsh() -> Tool {
+    probe_cmd("dsh", &["--version"]).await
 }
 
 /// Probe `dsh` searching `extra_dirs` first (the runtime prefix: fnm's node
 /// bin, pnpm's global bin, …), so a just-installed dsh is found even when
 /// its directory is not on the ambient `PATH`.
-pub fn dsh_in(extra_dirs: &[PathBuf]) -> Tool {
-    probe_cmd_in("dsh", &["--version"], extra_dirs)
+pub async fn dsh_in(extra_dirs: &[PathBuf]) -> Tool {
+    probe_cmd_in("dsh", &["--version"], extra_dirs).await
 }
 
 /// nvm needs special handling: it is a shell function on Unix and a binary
 /// (nvm-windows) on Windows.
-pub fn nvm() -> Tool {
+pub async fn nvm() -> Tool {
     if cfg!(target_os = "windows") {
         let Some(path) = platform::which("nvm") else {
             return Tool::missing("nvm");
         };
         let mut cmd = Command::new(&path);
         cmd.arg("version");
-        return match process::run(&mut cmd) {
+        return match process::run_async(&mut cmd).await {
             Ok(res) => {
                 let raw = res.stdout.trim().to_string();
                 Tool::found("nvm", path, raw)
@@ -143,5 +143,5 @@ pub fn nvm() -> Tool {
         }
     }
     // Rare: a real `nvm` binary on PATH.
-    probe_cmd("nvm", &["--version"])
+    probe_cmd("nvm", &["--version"]).await
 }

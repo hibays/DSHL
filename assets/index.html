@@ -3,18 +3,44 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="color-scheme" content="light dark" />
     <title data-i18n="page.title">DSHL · DeepSeek Harness Launcher</title>
-    <script src="webui.js"></script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <!--
+    DSHL · DeepSeek Harness Launcher — startup surface.
+    DIRECTION CONTRACT (Swiss International, user-pinned — no concept roll):
+    THESIS: A Swiss-international control panel for the launch console; it
+      refuses the decorated product dashboard and the previous heavy brutalism.
+      Calm, objective, ruled by the grid.
+    OWN-WORLD: pure-white / near-black ground that follows the OS theme
+      (prefers-color-scheme); hairline rules; self-hosted Inter grotesque; one
+      ultramarine accent (#2F6FE4) on the primary action, the running state,
+      and key values; status green/amber/red; checkbox checklist (double-layer
+      square: empty / lit core / filled check / red cross); flat, no shadows,
+      square corners.
+    STORY: the visitor lands mid-launch, reads a numbered stamp of install
+      progress and the live terminal, and acts on quiet buttons.
+    FIRST VIEWPORT: brand row top-left (logo + DSHL wordmark + tracked
+      subline), status stamp top-right with a colour square; two ruled columns
+      below (启动流程 checkbox / 配置 kv); the terminal log sits under them; a
+      fixed bottom hairline bar holds ghost, ultramarine primary, and red
+      danger buttons.
+    FORM: Swiss International — neutral tidy UI (user-pinned), light and dark
+      both authored from the OS use scene. No seed key; user-pinned direction.
+    FINISH: unreviewed and undocumented is unfinished; this build ends with the
+    finish review, the verdict, and DESIGN.md.
+    -->
     <div class="shell">
       <header>
         <div class="brand">
-          <img class="logo" src="/dsh-black.svg" alt="DSHL logo" />
-          <div>
+          <span class="logo-card">
+            <img class="logo" src="/dsh-black.svg" alt="DSHL logo" />
+          </span>
+          <div class="brand-text">
             <h1>DSHL</h1>
-            <p>DeepSeek Harness Launcher</p>
+            <p class="tag">DeepSeek Harness Launcher</p>
           </div>
         </div>
         <div class="status" id="status-badge" data-i18n="page.badge.starting">启动中…</div>
@@ -31,20 +57,20 @@
       </div>
 
       <main>
-        <section class="card">
-          <h2 data-i18n="page.heading.steps">启动流程</h2>
+        <section class="steps-card">
+          <h2 class="section-title" data-i18n="page.heading.steps">启动流程</h2>
           <ol class="steps" id="steps"></ol>
         </section>
 
-        <section class="card">
-          <h2><span data-i18n="page.heading.config">配置</span> <span class="path" id="config-path"></span></h2>
+        <section class="config-card">
+          <h2 class="section-title"><span data-i18n="page.heading.config">配置</span> <span class="path" id="config-path"></span></h2>
           <div class="config-error" id="config-error" hidden></div>
           <div class="kv" id="config-view"></div>
         </section>
       </main>
 
-      <section class="card log-card">
-        <h2 data-i18n="page.heading.log">日志</h2>
+      <section class="log-card">
+        <h2 class="section-title" data-i18n="page.heading.log">日志</h2>
         <pre class="log" id="log"></pre>
       </section>
 
@@ -60,6 +86,9 @@
         <button id="btn-exit" class="danger" onclick="exit_app()" data-i18n="page.btn.exit">退出</button>
       </footer>
     </div>
+    <!-- webui.js must load before app.js (it defines `webui`); it sits at the
+         bottom so it never blocks first paint of the title/status/log layout. -->
+    <script src="webui.js"></script>
     <script src="/i18n.js"></script>
     <script src="/app.js"></script>
   </body>

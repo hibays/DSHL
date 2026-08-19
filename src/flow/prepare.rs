@@ -7,6 +7,7 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 use crate::config::{Config, DshMode, Exector, Pm};
 use crate::error::Result;
@@ -153,7 +154,7 @@ async fn install_dsh(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) 
 
 /// Query the latest published `@deepseek-ai/dsh` version (best-effort).
 ///
-/// Runs in a background thread with a 5-second cap so a slow/offline registry
+/// Runs on the tokio runtime with a 5-second cap so a slow/offline registry
 /// never stalls the startup pipeline. The query uses the configured package
 /// manager (`npm view` / `pnpm view`); bun has no reliable `view`/publish
 /// query outside a project directory, so `npm view` is used there — npm
@@ -170,28 +171,23 @@ async fn query_latest_version(
         Pm::Npm | Pm::Bun => "npm",
         Pm::Pnpm => "pnpm",
     };
-    let (tx, rx) = std::sync::mpsc::channel();
+    let mut cmd = Command::new(platform::tool(tool));
+    cmd.args(["view", "@deepseek-ai/dsh", "version"]);
+    cmd.env("PATH", path);
+    process::with_env(&mut cmd, &env);
 
-    std::thread::spawn(move || {
-        let mut cmd = Command::new(platform::tool(tool));
-        cmd.args(["view", "@deepseek-ai/dsh", "version"]);
-        cmd.env("PATH", path);
-        process::with_env(&mut cmd, &env);
-        let version = process::run(&mut cmd).ok().and_then(|res| {
-            if res.success() {
-                FullVersion::parse(res.stdout.trim())
-            } else {
-                None
-            }
-        });
-        let _ = tx.send(version);
-    });
-
-    // npm view normally answers in ~1s; 3s caps a slow/blocked registry
-    // so the startup page is not held on a stall.
-    rx.recv_timeout(std::time::Duration::from_secs(3))
-        .ok()
-        .flatten()
+    // npm view normally answers in ~1s; the timeout caps a slow/blocked
+    // registry so the startup page is not held on a stall.
+    let Ok(Ok(res)) =
+        tokio::time::timeout(Duration::from_secs(3), process::run_async(&mut cmd)).await
+    else {
+        return None;
+    };
+    if res.success() {
+        FullVersion::parse(res.stdout.trim())
+    } else {
+        None
+    }
 }
 
 /// Build the command that will ultimately be spawned (managed) in Flow 5,
@@ -214,7 +210,7 @@ pub async fn run(
 ) -> Result<(Command, Option<Command>)> {
     progress::step("dsh", StepStatus::Running, t!("flow.prepare.preparing"));
 
-    let flags = split_args(&config.dsh.flags);
+    let flags = crate::control::apply_pending_profile(split_args(&config.dsh.flags));
 
     // Command that runs the installed `dsh` command directly.
     let direct = || {
@@ -262,7 +258,7 @@ pub async fn run(
 
     let (mut cmd, mut fallback) = match config.dsh.mode {
         DshMode::Install => {
-            let dsh = probe::dsh_in(&runtime.path_prefix());
+            let dsh = probe::dsh_in(&runtime.path_prefix()).await;
             if !dsh.found {
                 progress::log(t!("flow.prepare.not_installed"));
                 install_dsh(config, mirror, runtime).await?;
@@ -320,7 +316,7 @@ pub async fn run(
             // installed dsh is used without a registry round-trip). If the
             // runner fails to start, retry with the installed `dsh` command
             // when one exists.
-            let installed = probe::dsh_in(&runtime.path_prefix());
+            let installed = probe::dsh_in(&runtime.path_prefix()).await;
             let target = if config.dsh.wants_latest() {
                 "dsh".to_string()
             } else {
@@ -359,6 +355,9 @@ pub async fn run(
     if let Some(fb) = &mut fallback {
         apply_path(fb, runtime);
     }
+    // Remember the resolved runtime PATH so the control `open-terminal`
+    // method can spawn a terminal with the same (dsh-like) environment.
+    crate::control::store_runtime_path(&runtime.augmented_path());
     progress::step("dsh", StepStatus::Done, t!("flow.prepare.ready"));
     Ok((cmd, fallback))
 }

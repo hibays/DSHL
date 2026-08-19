@@ -1,0 +1,24 @@
+[package]
+name = "dshl"
+version.workspace = true
+edition.workspace = true
+description = "DeepSeek Harness web launcher — a webui.me wrapper that checks the runtime, installs dsh if needed, boots `dsh web`, and routes the browser to it."
+license.workspace = true
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+[dependencies]
+dshl-core = { path = "../.." }
+# SIGINT/SIGTERM handling so the launcher can clean up dsh on exit
+ctrlc = { version = "3", features = ["termination"] }
+
+# Embed the Windows .exe icon (resource) — see build.rs. This must be an
+# unconditional build-dependency: build scripts compile for the HOST, so the
+# `winres::` reference in build.rs has to resolve on every host even though the
+# actual embedding is gated at runtime by CARGO_CFG_TARGET_OS == "windows".
+[build-dependencies]
+winresource = "0.1"
+
+[package.metadata.winresource]
+OriginalFilename = "dshl.exe"

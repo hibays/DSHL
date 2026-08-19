@@ -22,7 +22,7 @@ use super::{FNM_GUIDE_URL, NODE_INSTALL_VERSION, NODE_MIN};
 /// Ensure Node.js is present and recent enough. Returns the directory that
 /// contains the `node` executable.
 pub async fn ensure_node(mirror: &MirrorConfig) -> Result<PathBuf> {
-    let node = probe::node();
+    let node = probe::node().await;
     if node.found {
         if let Some(v) = node.version {
             if v >= NODE_MIN {
@@ -73,7 +73,7 @@ async fn install_node(mirror: &MirrorConfig) -> Result<PathBuf> {
     }
 
     // 2. cargo install fnm
-    if probe::cargo().found {
+    if probe::cargo().await.found {
         progress::log(t!("install.node.try_cargo"));
         match install_fnm_via_cargo(mirror).await {
             Ok(fnm) => {
@@ -87,7 +87,7 @@ async fn install_node(mirror: &MirrorConfig) -> Result<PathBuf> {
     }
 
     // 3. nvm
-    if probe::nvm().found {
+    if probe::nvm().await.found {
         progress::log(t!("install.node.try_nvm"));
         if let Ok(dir) = install_node_with_nvm(mirror).await {
             return Ok(dir);
@@ -166,7 +166,7 @@ async fn install_node_with_nvm(mirror: &MirrorConfig) -> Result<PathBuf> {
         run_streaming(use_cmd, "nvm use").await?;
     } else {
         // nvm is a shell function; source its script first.
-        let nvm_sh = probe::nvm().path.unwrap_or_else(|| {
+        let nvm_sh = probe::nvm().await.path.unwrap_or_else(|| {
             platform::home_dir()
                 .unwrap_or_default()
                 .join(".nvm")

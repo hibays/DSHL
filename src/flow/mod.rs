@@ -83,8 +83,9 @@ pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Launch> {
             // gracefully (Ctrl+C) and WAIT; if it does not exit on its own,
             // abort the fallback rather than starting a second dsh next to it
             // (two writers on the same session log corrupt it permanently).
-            if let Some(child) = crate::DSH_CHILD.lock().unwrap().take()
-                && !child.graceful_kill(10_000)
+            let stale = crate::DSH_CHILD.lock().unwrap().take();
+            if let Some(child) = stale
+                && !child.graceful_kill(10_000).await
             {
                 progress::log(t!("flow.launch.stale_no_exit"));
                 // The old dsh is still running. Put it back into the global

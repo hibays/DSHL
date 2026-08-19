@@ -10,20 +10,23 @@ use std::process::Command;
 /// On Windows `taskkill /F /T` walks the parent-child tree; on Unix we send
 /// `SIGKILL`. Graceful stopping is done separately via
 /// [`crate::process::AsyncChild::signal_stop`].
+///
+/// The command runs through `prepare_spawn` so the console helper never pops a
+/// black window (`CREATE_NO_WINDOW` on Windows).
 pub fn kill_tree(pid: u32) {
-    if cfg!(target_os = "windows") {
-        let _ = Command::new("taskkill")
-            .args(["/F", "/T", "/PID", &pid.to_string()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
+    let mut cmd = if cfg!(target_os = "windows") {
+        let mut c = Command::new("taskkill");
+        c.args(["/F", "/T", "/PID", &pid.to_string()]);
+        c
     } else {
-        let _ = Command::new("kill")
-            .args(["-KILL", &pid.to_string()])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status();
-    }
+        let mut c = Command::new("kill");
+        c.args(["-KILL", &pid.to_string()]);
+        c
+    };
+    cmd.stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    crate::process::capture::prepare_spawn(&mut cmd);
+    let _ = cmd.status();
 }
 
 /// True if the process identified by `pid` is still running.

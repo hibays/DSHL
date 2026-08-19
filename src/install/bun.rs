@@ -26,7 +26,7 @@ pub async fn ensure_bun(config: &Config, mirror: &MirrorConfig) -> Result<Option
         return Ok(None);
     }
 
-    let bun = probe::bun();
+    let bun = probe::bun().await;
     if bun.found {
         if let Some(v) = bun.version {
             if v >= BUN_MIN {

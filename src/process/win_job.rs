@@ -64,27 +64,6 @@ fn job_handle() -> RawHandle {
     raw as RawHandle
 }
 
-/// Assign a spawned child to the shared kill-on-close job (best-effort).
-pub fn assign(child: &std::process::Child) {
-    use std::os::windows::io::AsRawHandle;
-    let job = job_handle();
-    if job.is_null() {
-        crate::debug::emit("win_job: no kill-on-close job (creation failed)");
-        return;
-    }
-    // SAFETY: `child` is a valid spawned process handle.
-    let ok = unsafe { AssignProcessToJobObject(HANDLE(job), HANDLE(child.as_raw_handle())) };
-    if ok.is_err() {
-        // Typical cause: the launcher itself already runs inside a job
-        // that does not allow nesting, so the child cannot be added to
-        // ours. The child then survives an abrupt launcher kill.
-        crate::debug::emit(&format!(
-            "win_job: AssignProcessToJobObject failed: {}",
-            std::io::Error::last_os_error()
-        ));
-    }
-}
-
 /// Assign a raw process handle to the shared kill-on-close job.
 pub fn assign_raw(process: RawHandle) {
     let job = job_handle();

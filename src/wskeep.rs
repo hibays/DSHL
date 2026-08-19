@@ -14,30 +14,36 @@
 //! PowerShell command-line match) is best-effort and does not fire on modern
 //! Windows/Edge, so the browser stays open on its own and the launcher tracks
 //! its process directly instead.
+//!
+//! The socket runs as an async task on the shared tokio runtime (see
+//! [`crate::runtime`]); a `Notify` wakes it on [`KeepAlive::stop`].
 
 use base64::Engine;
-use std::io::{Read, Write};
-use std::net::TcpStream;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
-/// Handle to a keep-alive WebSocket thread.
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::net::TcpStream;
+use tokio::sync::Notify;
+
+use crate::runtime;
+
+/// Handle to a keep-alive WebSocket task.
 ///
-/// The thread holds the `Arc`, so dropping the handle does not stop it (it
+/// The task holds its own `Arc`, so dropping the handle does not stop it (it
 /// lives for the process lifetime, as intended). Call [`KeepAlive::stop`] to
 /// close the connection — e.g. when the window closes to the tray, so the old
 /// window's webui server can shut down instead of staying alive on the
 /// keep-alive client.
 pub struct KeepAlive {
-    stop: Arc<AtomicBool>,
+    notify: Arc<Notify>,
 }
 
 impl KeepAlive {
-    /// Ask the keep-alive thread to close its WebSocket connection. The
-    /// thread notices on its next poll (≤200ms) and drops the socket.
+    /// Ask the keep-alive task to close its WebSocket connection. The task
+    /// notices on its next poll and drops the socket.
     pub fn stop(&self) {
-        self.stop.store(true, Ordering::SeqCst);
+        self.notify.notify_one();
     }
 }
 
@@ -46,13 +52,16 @@ impl KeepAlive {
 /// handle is stopped.
 pub fn spawn(port: u16) -> KeepAlive {
     let keepalive = KeepAlive {
-        stop: Arc::new(AtomicBool::new(false)),
+        notify: Arc::new(Notify::new()),
     };
-    let stop = keepalive.stop.clone();
-    std::thread::spawn(move || {
+    let notify = keepalive.notify.clone();
+
+    runtime::spawn(async move {
         let addr = format!("127.0.0.1:{port}");
         crate::debug::emit(&format!("keep-alive: connecting to {addr}"));
-        let Ok(mut stream) = TcpStream::connect(&addr) else {
+        let Ok(Ok(mut stream)) =
+            tokio::time::timeout(Duration::from_secs(5), TcpStream::connect(&addr)).await
+        else {
             crate::debug::emit("keep-alive: connect failed");
             return;
         };
@@ -67,17 +76,16 @@ pub fn spawn(port: u16) -> KeepAlive {
         let req = format!(
             "GET /_webui_ws_connect HTTP/1.1\r\nHost: {addr}\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Key: {key}\r\nSec-WebSocket-Version: 13\r\n\r\n"
         );
-        if stream.write_all(req.as_bytes()).is_err() {
+        if stream.write_all(req.as_bytes()).await.is_err() {
             return;
         }
 
         // Read the upgrade response headers.
-        let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
         let mut buf = [0u8; 4096];
         let mut response = Vec::new();
         while !response.windows(4).any(|w| w == b"\r\n\r\n") {
-            match stream.read(&mut buf) {
-                Ok(0) | Err(_) => {
+            match tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf)).await {
+                Ok(Ok(0)) | Ok(Err(_)) | Err(_) => {
                     crate::debug::emit(&format!(
                         "keep-alive: no/incomplete response ({} bytes): {}",
                         response.len(),
@@ -87,7 +95,7 @@ pub fn spawn(port: u16) -> KeepAlive {
                     ));
                     return;
                 }
-                Ok(n) => response.extend_from_slice(&buf[..n]),
+                Ok(Ok(n)) => response.extend_from_slice(&buf[..n]),
             }
             if response.len() > 16_384 {
                 return;
@@ -104,32 +112,31 @@ pub fn spawn(port: u16) -> KeepAlive {
 
         crate::debug::emit(&format!("keep-alive websocket established (port {port})"));
 
-        // Poll with a short read timeout so a stop request is noticed quickly
-        // and the socket is dropped, letting the old window's webui server
-        // shut down (it keeps running while any client is connected).
-        let _ = stream.set_read_timeout(Some(Duration::from_millis(200)));
+        // Discard frames until the process exits or a stop is requested,
+        // letting the old window's webui server shut down (it keeps running
+        // while any client is connected).
         loop {
-            if stop.load(Ordering::SeqCst) {
-                crate::debug::emit(&format!("keep-alive: stop requested (port {port})"));
-                return;
-            }
-            match stream.read(&mut buf) {
-                Ok(0) => {
-                    crate::debug::emit("keep-alive: server closed the connection");
+            tokio::select! {
+                _ = notify.notified() => {
+                    crate::debug::emit(&format!("keep-alive: stop requested (port {port})"));
                     return;
                 }
-                Err(e)
-                    if matches!(
-                        e.kind(),
-                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut
-                    ) => {}
-                Err(e) => {
-                    crate::debug::emit(&format!("keep-alive: read error: {e}"));
-                    return;
+                result = stream.read(&mut buf) => {
+                    match result {
+                        Ok(0) => {
+                            crate::debug::emit("keep-alive: server closed the connection");
+                            return;
+                        }
+                        Err(e) => {
+                            crate::debug::emit(&format!("keep-alive: read error: {e}"));
+                            return;
+                        }
+                        Ok(_) => {}
+                    }
                 }
-                Ok(_) => {}
             }
         }
     });
+
     keepalive
 }

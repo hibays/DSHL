@@ -5,7 +5,7 @@
 
 use std::path::PathBuf;
 
-use dshl::config;
+use dshl_core::config;
 
 const USAGE: &str = "\
 DSHL — DeepSeek Harness web launcher
@@ -63,10 +63,10 @@ fn parse_args() -> Cli {
 fn main() {
     // Must run before any window (WebView) is created, so high-DPI displays
     // don't bitmap-scale/blur the embedded WebView.
-    dshl::platform::make_dpi_aware();
+    dshl_core::platform::make_dpi_aware();
 
     // Pick the UI language once, before any translation is rendered.
-    dshl::i18n::init();
+    dshl_core::i18n::init();
 
     let cli = parse_args();
 
@@ -74,10 +74,10 @@ fn main() {
     let env_debug = std::env::var("DSHL_LOG")
         .map(|v| !v.trim().is_empty())
         .unwrap_or(false);
-    dshl::debug::set_enabled(cli.debug || env_debug);
+    dshl_core::debug::set_enabled(cli.debug || env_debug);
 
-    if dshl::debug::enabled() {
-        dshl::debug::emit("debug runtime logging enabled");
+    if dshl_core::debug::enabled() {
+        dshl_core::debug::emit("debug runtime logging enabled");
     }
 
     // Optional launcher-level single instance ([ui] single-instance): when
@@ -89,13 +89,13 @@ fn main() {
         .ui
         .single_instance
     {
-        if let Some(lock) = dshl::platform::single_instance::acquire() {
+        if let Some(lock) = dshl_core::platform::single_instance::acquire() {
             // First instance: the lock file handle must stay open for the
             // whole process lifetime or the kernel releases the lock. We
             // intentionally leak it (the OS reclaims it on exit).
             std::mem::forget(lock);
         } else {
-            dshl::platform::single_instance::notify_activate();
+            dshl_core::platform::single_instance::notify_activate();
             // Give the running instance a moment to bring its window to the
             // foreground before this one exits.
             std::thread::sleep(std::time::Duration::from_millis(500));
@@ -105,9 +105,9 @@ fn main() {
 
     // SIGINT/SIGTERM (and console Ctrl+C on Windows) → clean shutdown, which
     // kills the supervised dsh child.
-    let _ = ctrlc::set_handler(dshl::ui::request_shutdown);
+    let _ = ctrlc::set_handler(dshl_core::ui::request_shutdown);
 
-    dshl::ui::setup(cli.config);
-    dshl::ui::launch_flow();
-    dshl::ui::run_loop();
+    dshl_core::ui::setup(cli.config);
+    dshl_core::ui::launch_flow();
+    dshl_core::ui::run_loop();
 }

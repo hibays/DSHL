@@ -1,0 +1,6 @@
+# @dshl/control bundle patch: add the dshl control bridge as a profile row.
+# Applied with `dsh --profile <p> --patch <this file>`, or via the package's
+# `dsh.bundle.patch` when the bundle is installed into a profile.
+- insert:
+    - id: dshl-control
+      name: '@dshl/control'

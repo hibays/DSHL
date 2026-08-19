@@ -34,6 +34,8 @@ mod vfs;
 mod window;
 
 pub use exit::request_shutdown;
-pub use launch::{kill_dsh, launch_flow};
+#[cfg(test)]
+pub(crate) use exit::shutdown_requested;
+pub use launch::{kill_dsh, launch_flow, request_restart};
 pub use supervisor::run_loop;
 pub use window::setup;

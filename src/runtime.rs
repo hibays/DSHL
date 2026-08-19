@@ -1,104 +1,42 @@
-//! A dependency-free, runtime-free async executor.
+//! A thin async entry point over a single global tokio runtime.
 //!
-//! dshl deliberately avoids `tokio`/`smol`/`async-std`: we only need
-//! `std::future` + `std::task`. This module provides:
-//!
-//! * [`block_on`] — drives a single top-level future to completion on the
-//!   current thread, parking between polls.
-//! * [`sleep`] — a worker-thread friendly sleep future.
-//!
-//! The executor's waker captures the *executor* thread handle. Futures that
-//! are completed by other threads (see [`crate::process::AsyncChild`]) call
-//! [`Waker::wake`] from those threads, which unparks the executor thread.
+//! The launcher drives the whole startup pipeline from a dedicated worker
+//! thread through [`block_on`]. Inside that future everything runs on the
+//! shared multi-thread runtime: process I/O, timers and the keep-alive socket
+//! are true async (tokio) operations, so the executor is never blocked by the
+//! subprocesses it manages.
 
 use std::future::Future;
-use std::sync::Arc;
-use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
-use std::time::Duration;
+use std::sync::OnceLock;
+
+/// The shared runtime, created lazily on first use and kept for the process
+/// lifetime. Multi-thread so spawned tasks (process readers, reapers, probes,
+/// keep-alive) make progress concurrently with the driven top-level future.
+fn runtime() -> &'static tokio::runtime::Runtime {
+    static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+    RUNTIME.get_or_init(|| {
+        tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .thread_name("dshl-async")
+            .build()
+            .expect("failed to create the tokio runtime")
+    })
+}
 
 /// Drive `fut` to completion on the current thread.
 ///
-/// `Pending` futures park the thread until some other thread wakes the waker
-/// (e.g. a process reader thread delivering a new line).
+/// Called from the dedicated flow worker thread (and the shutdown helpers).
+/// The future runs on the shared runtime, which also drives every spawned
+/// task (process readers, reapers, keep-alive).
 pub fn block_on<F: Future>(fut: F) -> F::Output {
-    let mut fut = std::pin::pin!(fut);
-    let waker = thread_waker();
-    let mut cx = Context::from_waker(&waker);
-    loop {
-        match fut.as_mut().poll(&mut cx) {
-            Poll::Ready(value) => return value,
-            Poll::Pending => std::thread::park(),
-        }
-    }
+    runtime().block_on(fut)
 }
 
-/// A waker that unparks the thread that created it.
-fn thread_waker() -> Waker {
-    let handle = Arc::new(std::thread::current());
-    let data = Arc::into_raw(handle) as *const ();
-
-    unsafe fn clone_fn(data: *const ()) -> RawWaker {
-        // SAFETY: `data` is a valid `Arc<Thread>` created by `thread_waker`.
-        //
-        // The input waker's reference must be leaked (kept alive) while a NEW
-        // independent reference is added for the clone. Dropping the
-        // `from_raw`'d Arc instead would *transfer* the reference, letting the
-        // very first wake() from another thread free the `Arc<Thread>` while
-        // the executor still holds its waker — a use-after-free.
-        let arc = unsafe {
-            std::mem::ManuallyDrop::new(Arc::from_raw(data as *const std::thread::Thread))
-        };
-        std::mem::forget(Arc::clone(&arc));
-        RawWaker::new(data, &VTABLE)
-    }
-    unsafe fn wake_fn(data: *const ()) {
-        // SAFETY: `data` is a valid `Arc<Thread>` created by `thread_waker`.
-        let arc = unsafe { Arc::from_raw(data as *const std::thread::Thread) };
-        arc.unpark();
-    }
-    unsafe fn wake_by_ref_fn(data: *const ()) {
-        // SAFETY: `data` is a valid `Arc<Thread>` created by `thread_waker`.
-        let arc = unsafe { Arc::from_raw(data as *const std::thread::Thread) };
-        arc.unpark();
-        std::mem::forget(arc);
-    }
-    unsafe fn drop_fn(data: *const ()) {
-        // SAFETY: `data` is a valid `Arc<Thread>` created by `thread_waker`.
-        drop(unsafe { Arc::from_raw(data as *const std::thread::Thread) });
-    }
-
-    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone_fn, wake_fn, wake_by_ref_fn, drop_fn);
-
-    // SAFETY: `data` is a valid `Arc<Thread>` and the vtable matches it.
-    unsafe { Waker::from_raw(RawWaker::new(data, &VTABLE)) }
-}
-
-/// A future that resolves after `duration`.
-///
-/// This implementation simply sleeps the current thread. It is intended for
-/// the dedicated flow worker thread, so blocking it never stalls the UI
-/// (which runs on the main thread inside `webui::wait()`).
-pub async fn sleep(duration: Duration) {
-    std::thread::sleep(duration);
-}
-
-/// A future that resolves immediately, yielding a poll boundary.
-pub async fn yield_now() {
-    // A single `std::task` poll is enough to yield to the executor loop.
-    Yield(true).await;
-}
-
-struct Yield(bool);
-
-impl Future for Yield {
-    type Output = ();
-    fn poll(mut self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<()> {
-        if self.0 {
-            self.0 = false;
-            cx.waker().wake_by_ref();
-            Poll::Pending
-        } else {
-            Poll::Ready(())
-        }
-    }
+/// Spawn a background task on the shared runtime from any thread.
+pub fn spawn<F>(fut: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    runtime().spawn(fut)
 }

@@ -28,6 +28,35 @@ pub fn launch_flow() {
 
     let cli_path = state::CLI_CONFIG_PATH.lock().unwrap().clone();
 
+    // Populate the startup page BEFORE the worker thread starts so the very
+    // first `get_state` poll already returns the full step list and the
+    // resolved config. Previously this ran inside the worker behind the (up to
+    // 10s) stale-dsh cleanup, so the page first rendered as an empty "title +
+    // log box" and the flow steps / config block appeared only later.
+    let loaded = config::load(cli_path.as_deref());
+    *state::CONFIG_PATH.lock().unwrap() = loaded.path.clone();
+
+    let config_json = serde_json::to_string(&loaded.config).unwrap_or_default();
+    let path_str = loaded
+        .path
+        .as_ref()
+        .map(|p| p.display().to_string())
+        .unwrap_or_default();
+    progress::set_config(config_json, path_str, loaded.parse_error.clone());
+
+    // Same localized step list `flow::run` builds (id, title) — the canonical
+    // startup steps, shown immediately.
+    let steps: Vec<(&'static str, String)> = flow::STEPS
+        .iter()
+        .map(|&(id, key)| (id, t!(key).to_string()))
+        .collect();
+    progress::reset(&steps);
+    progress::clear_error();
+
+    if let Some(err) = &loaded.parse_error {
+        progress::log(t!("ui.launch.config_error", err = err.to_string()));
+    }
+
     std::thread::spawn(move || {
         // Ask any stale dsh left over from a previous failed attempt to exit
         // via Ctrl+C — the only correct way to close dsh on Windows
@@ -46,7 +75,7 @@ pub fn launch_flow() {
         // log), so it requires the user's explicit confirmation via the
         // dedicated button on the startup page.
         if let Some(child) = crate::DSH_CHILD.lock().unwrap().take() {
-            if !child.graceful_kill(10_000) {
+            if !runtime::block_on(child.graceful_kill(10_000)) {
                 let pid = child.pid().unwrap_or(0);
                 state::STALE_PID.store(pid, Ordering::SeqCst);
                 progress::set_stale_pid(Some(pid));
@@ -62,20 +91,6 @@ pub fn launch_flow() {
         if state::SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
             state::FLOW_RUNNING.store(false, Ordering::SeqCst);
             return;
-        }
-
-        let loaded = config::load(cli_path.as_deref());
-        *state::CONFIG_PATH.lock().unwrap() = loaded.path.clone();
-
-        let config_json = serde_json::to_string(&loaded.config).unwrap_or_default();
-        let path_str = loaded
-            .path
-            .as_ref()
-            .map(|p| p.display().to_string())
-            .unwrap_or_default();
-        progress::set_config(config_json, path_str, loaded.parse_error.clone());
-        if let Some(err) = &loaded.parse_error {
-            progress::log(t!("ui.launch.config_error", err = err.to_string()));
         }
 
         let mirror = MirrorConfig::resolve(&loaded.config);
@@ -115,14 +130,26 @@ pub fn launch_flow() {
                     }
 
                     // Supervise dsh: drain its output until it exits. A clean
-                    // exit (code 0) shuts the launcher down as before; an
+                    // exit (code 0) shuts the launcher down as before — unless
+                    // a restart was requested (control plane), in which case
+                    // dsh's exit is the signal to relaunch in place. An
                     // unexpected exit starts crash recovery instead (back to
                     // the startup page + a 5s auto-restart countdown).
                     match runtime::block_on(flow::launch::supervise(launch.child)) {
                         flow::launch::DshExit::Clean => {
+                            if state::RESTART_REQUESTED.swap(false, Ordering::SeqCst) {
+                                // dsh exited because the control plane asked us
+                                // to restart it. Reset the flow gate and run the
+                                // pipeline again; the launcher page is already
+                                // showing (CRASH_NAVIGATE_PENDING).
+                                state::FLOW_RUNNING.store(false, Ordering::SeqCst);
+                                launch_flow();
+                                return;
+                            }
                             state::SHOULD_EXIT.store(true, Ordering::SeqCst);
                         }
                         flow::launch::DshExit::Crash(code) => {
+                            state::RESTART_REQUESTED.store(false, Ordering::SeqCst);
                             // The user already closed the window (e.g. a
                             // non-tray exit); don't resurrect, just exit.
                             if state::SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
@@ -151,6 +178,31 @@ pub fn launch_flow() {
 /// ever follows.
 pub fn kill_dsh() {
     if let Some(child) = crate::DSH_CHILD.lock().unwrap().take() {
-        child.graceful_kill(30_000);
+        runtime::block_on(child.graceful_kill(30_000));
+    }
+}
+
+/// Restart dsh in place: go back to the launcher page, stop the current dsh
+/// child and run the startup pipeline again.
+///
+/// The supervised dsh cannot be relaunched directly — the launch worker thread
+/// holds `FLOW_RUNNING` while it supervises the live child, so `launch_flow`
+/// would bail. Instead we set [`state::RESTART_REQUESTED`] and ask the current
+/// child to exit (Ctrl+C); its supervisor observes the clean exit and relaunches
+/// (see the `DshExit::Clean` branch of the launch worker). The window is already
+/// back on the launcher page (`CRASH_NAVIGATE_PENDING`), so the restart progress
+/// is visible while the old dsh tears down and the new one boots.
+///
+/// When there is no supervised child to stop (dsh already dead), the flow gate
+/// is free and `launch_flow()` starts directly. Safe to call from any thread.
+pub fn request_restart() {
+    state::CRASH_NAVIGATE_PENDING.store(true, Ordering::SeqCst);
+    crate::debug::emit("control: restart requested");
+    match crate::DSH_CHILD.lock().unwrap().clone() {
+        Some(child) => {
+            state::RESTART_REQUESTED.store(true, Ordering::SeqCst);
+            child.signal_stop();
+        }
+        None => launch_flow(),
     }
 }

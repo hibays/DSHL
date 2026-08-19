@@ -1,21 +1,36 @@
 //! [`AsyncChild`]: a child process whose stdout/stderr can be awaited line by
 //! line.
 //!
-//! Two reader threads feed a shared queue while a third thread reaps the
-//! process and, only after both streams have been fully drained, marks the
-//! child as done. This makes the async contract sound: [`AsyncChild::next_line`]
-//! returns `None` exactly once every output line has been delivered.
+//! Console-less helpers are spawned through `tokio::process::Command` on every
+//! platform (real async pipes; `CREATE_NO_WINDOW` on Windows, PDEATHSIG on
+//! Linux come from `capture::to_tokio`). The Windows **console** path
+//! ([`AsyncChild::spawn_console`], used for dsh) instead goes through a raw
+//! `CreateProcessW` that creates the child's console already hidden — std and
+//! tokio would pop a visible window and steal focus. Output is read
+//! asynchronously on the shared tokio runtime and delivered through a shared
+//! queue; a `Notify` wakes the awaiting consumer. Completion is driven by the
+//! process exit, not by pipe EOF — a detached grandchild can inherit the pipe
+//! write ends and keep them open after the process itself has exited, so
+//! waiting for EOF would hang the stream forever.
 //!
-//! Windows specifics (hidden-console spawn, Ctrl+C signalling, job objects)
-//! live in the private [`super::win_proc`] / [`super::win_job`] modules; this
-//! module only calls their narrow entry points.
+//! Windows specifics (hidden-console spawn flags, Ctrl+C signalling, job
+//! objects) live in the private [`super::win_proc`] / [`super::win_job`]
+//! modules; this module only calls their narrow entry points.
 
 use std::collections::VecDeque;
 use std::future::Future;
-use std::io::{self, BufRead, BufReader};
-use std::process::{Child, Command, Stdio};
+use std::io;
+use std::pin::Pin;
+use std::process::{Command, Stdio};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
-use std::task::{Context, Poll, Waker};
+use std::task::{Context, Poll};
+use std::time::{Duration, Instant};
+
+use tokio::io::{AsyncBufReadExt, AsyncRead, BufReader};
+use tokio::sync::Notify;
+
+use crate::runtime;
 
 #[cfg(target_os = "windows")]
 use super::{win_job, win_proc};
@@ -27,95 +42,79 @@ pub enum Output {
     Stderr(String),
 }
 
-/// How the child process handle is held.
-#[cfg(target_os = "windows")]
-enum ProcessKind {
-    Std(Child),
-    /// Raw `HANDLE` stored as `usize` so it is `Send + Sync`.
-    Raw(usize),
-}
-#[cfg(not(target_os = "windows"))]
-enum ProcessKind {
-    Std(Child),
-}
+/// How long to keep waiting for pipe EOF after the process has exited before
+/// declaring the output finished anyway.
+///
+/// Normal children hit EOF within milliseconds of exiting. Only a detached
+/// grandchild that inherited the pipe write ends keeps them open — and bytes
+/// written after the process exits are not the process's output, so the stream
+/// should not wait for them.
+const STREAM_GRACE: Duration = Duration::from_millis(1500);
 
 struct Inner {
     /// The spawned pid, kept separately so `pid()`/`kill()` never contend with
-    /// the reaper thread's `wait()`.
+    /// the reaper.
     pid: u32,
-    process: Mutex<Option<ProcessKind>>,
+    process: Mutex<Option<tokio::process::Child>>,
     lines: Mutex<VecDeque<Output>>,
-    done: Mutex<bool>,
     /// Exit code (`None` while running).
     code: Mutex<Option<i32>>,
-    waker: Mutex<Option<Waker>>,
+    process_done: AtomicBool,
+    /// When the process exited (`None` while running), for the EOF-grace path.
+    process_exited_at: Mutex<Option<Instant>>,
+    streams_remaining: AtomicUsize,
+    streams_done: AtomicBool,
+    notify: Notify,
 }
 
-fn wake(inner: &Inner) {
-    if let Some(w) = inner.waker.lock().unwrap().take() {
-        w.wake();
+impl Inner {
+    /// Both the process has exited AND the output has been fully drained.
+    ///
+    /// Normally that means both pipes hit EOF. But a detached grandchild can
+    /// inherit the pipe write ends and keep them open after the process exits,
+    /// so EOF never arrives; in that case the stream is considered finished
+    /// once a short grace has elapsed since the process exited.
+    fn done(&self) -> bool {
+        if !self.process_done.load(Ordering::SeqCst) {
+            return false;
+        }
+        if self.streams_done.load(Ordering::SeqCst) {
+            return true;
+        }
+        match *self.process_exited_at.lock().unwrap() {
+            Some(at) => at.elapsed() >= STREAM_GRACE,
+            None => false,
+        }
     }
 }
 
 /// A child process whose stdout/stderr can be awaited line by line.
 ///
-/// Two reader threads feed a shared queue while a third thread reaps the
-/// process and, only after both streams have been fully drained, marks the
-/// child as done. This makes the async contract sound: [`AsyncChild::next_line`]
-/// returns `None` exactly once every output line has been delivered.
+/// The pipes are read asynchronously on the tokio runtime; [`AsyncChild::next_line`]
+/// returns `None` exactly once the process has exited and every output line has
+/// been delivered.
 pub struct AsyncChild {
     inner: Arc<Inner>,
 }
 
 impl AsyncChild {
     /// Spawn with piped stdout/stderr (and no stdin).
+    ///
+    /// No console window (`CREATE_NO_WINDOW` on Windows). Used for short-lived
+    /// helper commands that never need Ctrl+C signalling.
     pub fn spawn(cmd: &mut Command) -> io::Result<Self> {
-        super::capture::prepare_spawn(cmd);
-
-        let mut child = cmd
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .stdin(Stdio::null())
-            .spawn()?;
-
-        // On Windows, assign the child to a kill-on-close job object so it is
-        // reaped automatically if the launcher is terminated abruptly.
-        #[cfg(target_os = "windows")]
-        win_job::assign(&child);
-
-        let stdout = child.stdout.take().unwrap();
-        let stderr = child.stderr.take().unwrap();
-        let pid = child.id();
-
-        let inner = Arc::new(Inner {
-            pid,
-            process: Mutex::new(Some(ProcessKind::Std(child))),
-            lines: Mutex::new(VecDeque::new()),
-            done: Mutex::new(false),
-            code: Mutex::new(None),
-            waker: Mutex::new(None),
-        });
-
-        Self::start_readers(inner, stdout, stderr)
+        Self::spawn_inner(cmd)
     }
 
     /// Spawn with a hidden console + new process group (Windows) so the child
-    /// can later be stopped gracefully via Ctrl+C. Falls back to [`spawn`] on
-    /// non-Windows.
+    /// can later be stopped gracefully via Ctrl+C. On Windows the console is
+    /// created already hidden (raw `CreateProcessW`, `STARTF_USESHOWWINDOW |
+    /// SW_HIDE`) so the child never flashes or steals focus; on other
+    /// platforms falls back to [`spawn`].
     pub fn spawn_console(cmd: &mut Command) -> io::Result<Self> {
         #[cfg(target_os = "windows")]
         {
-            let spawned = win_proc::spawn_hidden_console(cmd)?;
-            win_job::assign_raw(spawned.process);
-            let inner = Arc::new(Inner {
-                pid: spawned.pid,
-                process: Mutex::new(Some(ProcessKind::Raw(spawned.process as usize))),
-                lines: Mutex::new(VecDeque::new()),
-                done: Mutex::new(false),
-                code: Mutex::new(None),
-                waker: Mutex::new(None),
-            });
-            Self::start_readers(inner, spawned.stdout, spawned.stderr)
+            Self::spawn_hidden(cmd)
         }
         #[cfg(not(target_os = "windows"))]
         {
@@ -123,36 +122,108 @@ impl AsyncChild {
         }
     }
 
-    fn start_readers(
-        inner: Arc<Inner>,
-        stdout: impl std::io::Read + Send + 'static,
-        stderr: impl std::io::Read + Send + 'static,
-    ) -> io::Result<Self> {
-        let h1 = spawn_reader(inner.clone(), stdout, true);
-        let h2 = spawn_reader(inner.clone(), stderr, false);
+    /// Spawn a console-less helper on the tokio runtime.
+    fn spawn_inner(cmd: &mut Command) -> io::Result<Self> {
+        // std resolves bare program names against PATH; its spawn settings
+        // (creation_flags, etc.) survive the conversion to tokio, which spawns
+        // the wrapped std Command.
+        let mut tcmd = super::capture::to_tokio(cmd);
+        let mut child = tcmd
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .stdin(Stdio::null())
+            .spawn()?;
+        #[cfg(target_os = "windows")]
+        win_job::assign_raw(child.raw_handle().expect("spawned child has a handle"));
+        let pid = child.id().expect("spawned child has an id");
+        let stdout = child.stdout.take().expect("stdout is piped");
+        let stderr = child.stderr.take().expect("stderr is piped");
 
-        {
+        let inner = Arc::new(Inner {
+            pid,
+            process: Mutex::new(Some(child)),
+            lines: Mutex::new(VecDeque::new()),
+            code: Mutex::new(None),
+            process_done: AtomicBool::new(false),
+            process_exited_at: Mutex::new(None),
+            streams_remaining: AtomicUsize::new(2),
+            streams_done: AtomicBool::new(false),
+            notify: Notify::new(),
+        });
+
+        runtime::spawn(read_lines(inner.clone(), stdout, true));
+        runtime::spawn(read_lines(inner.clone(), stderr, false));
+
+        // Reap the process on the runtime (tokio's async wait — no dedicated
+        // thread). A second notify after the EOF grace lets a consumer stuck
+        // on the Notify wake up even if the pipes never EOF (grandchild-held).
+        runtime::spawn({
             let inner = inner.clone();
-            std::thread::spawn(move || {
-                // Take the process out of the mutex first so `pid()`/`kill()` are
-                // never blocked while this thread waits.
+            async move {
                 let taken = inner.process.lock().unwrap().take();
                 let code = match taken {
-                    Some(ProcessKind::Std(mut c)) => c.wait().ok().and_then(|s| s.code()),
-                    #[cfg(target_os = "windows")]
-                    Some(ProcessKind::Raw(h)) => {
-                        win_proc::wait_handle(h as std::os::windows::io::RawHandle)
-                    }
+                    Some(mut child) => child.wait().await.ok().and_then(|s| s.code()),
                     None => None,
                 };
-                // Drain both streams completely before declaring done.
-                let _ = h1.join();
-                let _ = h2.join();
                 *inner.code.lock().unwrap() = code;
-                *inner.done.lock().unwrap() = true;
-                wake(&inner);
-            });
-        }
+                *inner.process_exited_at.lock().unwrap() = Some(Instant::now());
+                inner.process_done.store(true, Ordering::SeqCst);
+                inner.notify.notify_one();
+                tokio::time::sleep(STREAM_GRACE).await;
+                inner.notify.notify_one();
+            }
+        });
+
+        Ok(Self { inner })
+    }
+
+    /// Spawn a child with a hidden console (Windows only): the raw
+    /// `CreateProcessW` path in [`super::win_proc`] creates the console window
+    /// already hidden (`STARTF_USESHOWWINDOW | SW_HIDE`), so the child never
+    /// flashes and never steals focus — `std`/`tokio` cannot do this. The raw
+    /// process handle is reaped on a blocking thread (tokio cannot wrap a raw
+    /// handle), while the piped output is drained by blocking reader threads
+    /// feeding the same shared queue as the async path.
+    #[cfg(target_os = "windows")]
+    fn spawn_hidden(cmd: &mut Command) -> io::Result<Self> {
+        let spawned = win_proc::spawn_hidden_console(cmd)?;
+        win_job::assign_raw(spawned.process);
+        let pid = spawned.pid;
+
+        let inner = Arc::new(Inner {
+            pid,
+            // The raw process handle is owned by the reaper thread; nothing
+            // here waits on a tokio child.
+            process: Mutex::new(None),
+            lines: Mutex::new(VecDeque::new()),
+            code: Mutex::new(None),
+            process_done: AtomicBool::new(false),
+            process_exited_at: Mutex::new(None),
+            streams_remaining: AtomicUsize::new(2),
+            streams_done: AtomicBool::new(false),
+            notify: Notify::new(),
+        });
+
+        spawn_blocking_reader(inner.clone(), spawned.stdout, true);
+        spawn_blocking_reader(inner.clone(), spawned.stderr, false);
+
+        // The raw handle is a `*mut c_void` (not `Send`); move it as `usize`
+        // so the reaper thread can own and close it.
+        let handle = spawned.process as usize;
+        std::thread::spawn({
+            let inner = inner.clone();
+            move || {
+                let handle = handle as std::os::windows::io::RawHandle;
+                let code = win_proc::wait_handle(handle);
+                win_proc::close_handle(handle);
+                *inner.code.lock().unwrap() = code;
+                *inner.process_exited_at.lock().unwrap() = Some(Instant::now());
+                inner.process_done.store(true, Ordering::SeqCst);
+                inner.notify.notify_one();
+                std::thread::sleep(STREAM_GRACE);
+                inner.notify.notify_one();
+            }
+        });
 
         Ok(Self { inner })
     }
@@ -160,7 +231,10 @@ impl AsyncChild {
     /// Await the next stdout/stderr line. `None` once the process exited and
     /// all output has been drained.
     pub fn next_line(&self) -> NextLine<'_> {
-        NextLine { inner: &self.inner }
+        NextLine {
+            inner: &self.inner,
+            waiting: None,
+        }
     }
 
     /// Process id of the spawned child.
@@ -197,11 +271,11 @@ impl AsyncChild {
     /// callers must wait for the child to actually exit (or abort the launch)
     /// before starting a replacement. Returns `true` when the child exited
     /// within the grace period.
-    pub fn graceful_kill(&self, grace_ms: u64) -> bool {
+    pub async fn graceful_kill(&self, grace_ms: u64) -> bool {
         self.signal_stop();
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         let mut last_stop = start;
-        let re_send = std::time::Duration::from_secs(5);
+        let re_send = Duration::from_secs(5);
         while start.elapsed().as_millis() < grace_ms as u128 {
             if !crate::platform::process_alive(self.inner.pid) {
                 return true;
@@ -209,10 +283,10 @@ impl AsyncChild {
             // The first Ctrl+C can be lost (child busy / mid-console-init);
             // re-send periodically so a slow graceful shutdown still happens.
             if last_stop.elapsed() >= re_send {
-                last_stop = std::time::Instant::now();
+                last_stop = Instant::now();
                 self.signal_stop();
             }
-            std::thread::sleep(std::time::Duration::from_millis(500));
+            tokio::time::sleep(Duration::from_millis(500)).await;
         }
         let alive = crate::platform::process_alive(self.inner.pid);
         if alive {
@@ -236,47 +310,192 @@ impl AsyncChild {
     }
 }
 
-fn spawn_reader(
+/// Read one pipe asynchronously, feeding lines into the shared queue and
+/// waking the consumer. Marks the streams done when both pipes hit EOF.
+async fn read_lines(
+    inner: Arc<Inner>,
+    stream: impl AsyncRead + Unpin + Send + 'static,
+    is_stdout: bool,
+) {
+    let mut reader = BufReader::new(stream);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line).await {
+            Ok(0) => break,
+            Ok(_) => {
+                let trimmed = line.trim_end().to_string();
+                let out = if is_stdout {
+                    Output::Stdout(trimmed)
+                } else {
+                    Output::Stderr(trimmed)
+                };
+                inner.lines.lock().unwrap().push_back(out);
+                inner.notify.notify_one();
+            }
+            Err(_) => break,
+        }
+    }
+    if inner.streams_remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
+        inner.streams_done.store(true, Ordering::SeqCst);
+        inner.notify.notify_one();
+    }
+}
+
+/// Drain a blocking pipe (raw hidden-console spawn's stdio) line by line into
+/// the shared queue — the same contract as [`read_lines`], but for the plain
+/// `std::fs::File` handles `CreateProcessW` hands us (no tokio child to wait
+/// on, so the reads run on plain threads).
+#[cfg(target_os = "windows")]
+fn spawn_blocking_reader(
     inner: Arc<Inner>,
     stream: impl std::io::Read + Send + 'static,
     is_stdout: bool,
-) -> std::thread::JoinHandle<()> {
+) {
     std::thread::spawn(move || {
-        let reader = BufReader::new(stream);
-        for line in reader.lines() {
-            match line {
-                Ok(l) => {
+        use std::io::{BufRead, BufReader};
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        loop {
+            line.clear();
+            match reader.read_line(&mut line) {
+                Ok(0) => break,
+                Ok(_) => {
+                    let trimmed = line.trim_end().to_string();
                     let out = if is_stdout {
-                        Output::Stdout(l)
+                        Output::Stdout(trimmed)
                     } else {
-                        Output::Stderr(l)
+                        Output::Stderr(trimmed)
                     };
                     inner.lines.lock().unwrap().push_back(out);
-                    wake(&inner);
+                    inner.notify.notify_one();
                 }
                 Err(_) => break,
             }
         }
-    })
+        if inner.streams_remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
+            inner.streams_done.store(true, Ordering::SeqCst);
+            inner.notify.notify_one();
+        }
+    });
 }
 
 /// Future returned by [`AsyncChild::next_line`].
+///
+/// The waiting state is a tokio `Notify` waiter; every wake re-checks the queue
+/// (and the done flag) so a line that arrived before the waiter was armed is
+/// never skipped. Safe: no custom wakers involved.
 pub struct NextLine<'a> {
     inner: &'a Inner,
+    waiting: Option<Pin<Box<dyn Future<Output = ()> + Send + 'a>>>,
 }
 
 impl Future for NextLine<'_> {
     type Output = Option<Output>;
 
-    fn poll(self: std::pin::Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
-        let line = self.inner.lines.lock().unwrap().pop_front();
-        if let Some(l) = line {
-            return Poll::Ready(Some(l));
+    fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
+        loop {
+            // Serve any pending lines first.
+            if let Some(line) = self.inner.lines.lock().unwrap().pop_front() {
+                return Poll::Ready(Some(line));
+            }
+
+            // The process exited and the output was drained (or the EOF grace
+            // elapsed): finished.
+            if self.inner.done() {
+                return Poll::Ready(None);
+            }
+
+            // Ensure a waiter is registered on the notify before parking.
+            if self.waiting.is_none() {
+                self.waiting = Some(Box::pin(self.inner.notify.notified()));
+            }
+            if self.waiting.as_mut().unwrap().as_mut().poll(cx).is_ready() {
+                // The notification was already pending (a permit stored before
+                // we registered — e.g. a line notify racing this poll). The
+                // permit is now consumed; drop the waiter and loop to re-check
+                // the queue/done and register a FRESH waiter. Returning Pending
+                // while `self.waiting` is None (or a consumed waiter) would be
+                // a lost wakeup: a later notify_one() would find no waiter and
+                // park us forever.
+                self.waiting = None;
+                continue;
+            }
+            return Poll::Pending;
         }
-        if *self.inner.done.lock().unwrap() {
-            return Poll::Ready(None);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::time::Duration;
+
+    #[test]
+    fn drains_despite_lingering_grandchild() {
+        // A child that spawns a detached grandchild inheriting its stdout
+        // write end, then exits. The grandchild keeps the pipe open, so EOF
+        // never arrives — completion must be driven by the process exit, not
+        // pipe EOF.
+        let mut cmd = Command::new(std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".into()));
+        cmd.args(["/c", "echo hello & start /b cmd /c timeout /t 60 & exit"]);
+        let child = AsyncChild::spawn(&mut cmd).expect("spawn");
+        let pid = child.pid().expect("pid");
+        let result = crate::runtime::block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                let mut lines = Vec::new();
+                while let Some(l) = child.next_line().await {
+                    lines.push(l);
+                }
+                lines
+            })
+            .await
+        });
+        crate::platform::kill_tree(pid);
+        match result {
+            Ok(lines) => {
+                eprintln!("lines: {lines:?}");
+                assert!(
+                    child.exit_code() == Some(0),
+                    "exit code: {:?}",
+                    child.exit_code()
+                );
+            }
+            Err(_) => panic!("drain timed out — pipes never EOF even though the process exited"),
         }
-        *self.inner.waker.lock().unwrap() = Some(cx.waker().clone());
-        Poll::Pending
+    }
+
+    #[test]
+    fn drains_simple_child() {
+        let mut cmd = Command::new(std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".into()));
+        cmd.args(["/c", "echo hello & echo world"]);
+        let child = AsyncChild::spawn(&mut cmd).expect("spawn");
+        let result = crate::runtime::block_on(async {
+            tokio::time::timeout(Duration::from_secs(5), async {
+                let mut lines = Vec::new();
+                while let Some(l) = child.next_line().await {
+                    lines.push(l);
+                }
+                lines
+            })
+            .await
+        });
+        match result {
+            Ok(lines) => {
+                assert_eq!(
+                    lines,
+                    vec![
+                        Output::Stdout("hello".into()),
+                        Output::Stdout("world".into())
+                    ]
+                );
+                assert!(
+                    child.exit_code() == Some(0),
+                    "exit code: {:?}",
+                    child.exit_code()
+                );
+            }
+            Err(_) => panic!("drain timed out — pipes never EOF / done never set"),
+        }
     }
 }

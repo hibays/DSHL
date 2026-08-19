@@ -7,8 +7,9 @@
 //! 4. installs / resolves `@deepseek-ai/dsh`,
 //! 5. boots `dsh web` and routes the browser to its URL.
 //!
-//! Everything is configurable through `dshl.toml`, and the launcher uses
-//! dependency-free native async (`std::future`) — no tokio.
+//! Everything is configurable through `dshl.toml`, and the launcher drives its
+//! startup pipeline on a minimal tokio runtime (true async process I/O, timers
+//! and the keep-alive socket — see [`runtime`]).
 //!
 //! Module map (loosely coupled, one concern per module):
 //! - [`platform`]: OS primitives (detection, paths, processes, DPI, theme,
@@ -27,6 +28,7 @@
 extern crate rust_i18n;
 
 pub mod config;
+pub mod control;
 pub mod debug;
 pub mod error;
 pub mod flow;

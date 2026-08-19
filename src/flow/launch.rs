@@ -34,6 +34,9 @@ fn url_regex() -> &'static Regex {
 }
 
 pub async fn run(mut command: Command) -> Result<Launch> {
+    // Let the dsh-side plugin find the launcher's control endpoint.
+    crate::control::inject_env(&mut command);
+
     progress::step("launch", StepStatus::Running, t!("flow.launch.starting"));
 
     let path = log_path();

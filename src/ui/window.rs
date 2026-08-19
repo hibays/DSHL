@@ -272,6 +272,14 @@ fn create_window() -> webui::Window {
 pub fn setup(cli_config_path: Option<PathBuf>) {
     *state::CLI_CONFIG_PATH.lock().unwrap() = cli_config_path.clone();
 
+    // Start the control plane (the `@dshl/control` plugin contract endpoint)
+    // before any dsh can be spawned, so `DSHL_CONTROL_URL` is ready when the
+    // dsh command is built. Best-effort: a bind failure only disables remote
+    // control, never the launcher.
+    if let Err(e) = crate::control::start() {
+        crate::debug::emit(&format!("control server failed to start: {e}"));
+    }
+
     // Read the configured UI mode and close-to-tray preference
     // (loads/generates dshl.toml if absent).
     let ui = config::load(cli_config_path.as_deref()).config.ui;

@@ -1,9 +1,11 @@
 //! Windows hidden-console process spawn + graceful stop helpers.
 //!
-//! All Win32 calls go through the `windows` crate (windows-rs 0.62) — no
-//! hand-written `#[link] extern "system"` FFI. Used by
-//! [`crate::process::child`] (`spawn_console` / `signal_stop` / raw-handle
-//! reaping).
+//! Spawning itself is handled by raw `CreateProcessW` through the `windows`
+//! crate (windows-rs 0.62), no hand-written FFI. The console is created hidden
+//! at spawn time (`STARTF_USESHOWWINDOW | wShowWindow = SW_HIDE`), so the child
+//! never flashes a window and never steals focus — `std`/`tokio` cannot do
+//! this (they always show the new console), which is why the dsh child goes
+//! through this path.
 
 #![cfg(target_os = "windows")]
 
@@ -15,7 +17,8 @@ use std::process::Command;
 
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HANDLE_FLAG_INHERIT, SetHandleInformation};
 use windows::Win32::System::Console::{
-    AttachConsole, CTRL_C_EVENT, FreeConsole, GenerateConsoleCtrlEvent, SetConsoleCtrlHandler,
+    AttachConsole, CTRL_C_EVENT, FreeConsole, GenerateConsoleCtrlEvent, GetStdHandle,
+    STD_ERROR_HANDLE, STD_INPUT_HANDLE, STD_OUTPUT_HANDLE, SetConsoleCtrlHandler, SetStdHandle,
 };
 use windows::Win32::System::Pipes::CreatePipe;
 use windows::Win32::System::Threading::{
@@ -26,7 +29,7 @@ use windows::Win32::System::Threading::{
 };
 use windows::core::{PCWSTR, PWSTR};
 
-/// A process spawned with hidden console, its pid and piped stdio.
+/// A process spawned with a hidden console, its pid and piped stdio.
 pub struct Spawned {
     pub process: RawHandle,
     pub pid: u32,
@@ -97,11 +100,26 @@ fn build_env_block(cmd: &Command) -> Vec<u16> {
     block
 }
 
+fn create_pipe() -> std::io::Result<(RawHandle, RawHandle)> {
+    let mut read = HANDLE::default();
+    let mut write = HANDLE::default();
+    // SAFETY: null attrs/size use the defaults.
+    unsafe {
+        CreatePipe(&mut read, &mut write, None, 0).map_err(|_| std::io::Error::last_os_error())?;
+    }
+    // The child must inherit the write end; the parent keeps the read end.
+    unsafe {
+        let _ = SetHandleInformation(write, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT);
+    }
+    Ok((read.0, write.0))
+}
+
 /// Spawn `cmd` with `CREATE_NEW_CONSOLE | CREATE_NEW_PROCESS_GROUP` and a
-/// hidden window, wiring piped stdout/stderr. The child can later be stopped
-/// gracefully with [`send_ctrl_c`].
+/// **hidden** window (`STARTF_USESHOWWINDOW | SW_HIDE`), wiring piped
+/// stdout/stderr. The console exists (so Ctrl+C signalling works) but is never
+/// shown — no flash, no focus steal. The child can later be stopped gracefully
+/// with [`send_ctrl_c`].
 pub fn spawn_hidden_console(cmd: &Command) -> std::io::Result<Spawned> {
-    // Create pipes for stdout/stderr.
     let (out_r, out_w) = create_pipe()?;
     let (err_r, err_w) = create_pipe()?;
 
@@ -183,21 +201,8 @@ pub fn spawn_hidden_console(cmd: &Command) -> std::io::Result<Spawned> {
     })
 }
 
-fn create_pipe() -> std::io::Result<(RawHandle, RawHandle)> {
-    let mut read = HANDLE::default();
-    let mut write = HANDLE::default();
-    // SAFETY: null attrs/size use the defaults.
-    unsafe {
-        CreatePipe(&mut read, &mut write, None, 0).map_err(|_| std::io::Error::last_os_error())?;
-    }
-    // The child must inherit the write end; the parent keeps the read end.
-    unsafe {
-        let _ = SetHandleInformation(write, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT);
-    }
-    Ok((read.0, write.0))
-}
-
-/// Wait for the process to exit and return its exit code.
+/// Block until the process identified by `handle` exits, returning its exit
+/// code (or `None` if it could not be read).
 pub fn wait_handle(handle: RawHandle) -> Option<i32> {
     // SAFETY: handle is a valid process handle.
     unsafe {
@@ -208,6 +213,14 @@ pub fn wait_handle(handle: RawHandle) -> Option<i32> {
         } else {
             None
         }
+    }
+}
+
+/// Close a process handle (the caller owns it).
+pub fn close_handle(handle: RawHandle) {
+    // SAFETY: handle is owned by the caller.
+    unsafe {
+        let _ = CloseHandle(HANDLE(handle));
     }
 }
 
@@ -229,27 +242,47 @@ pub fn wait_handle(handle: RawHandle) -> Option<i32> {
 /// user sees as "closed the window but dshl died on Ctrl+C". So we ignore
 /// Ctrl+C for ourselves while the broadcast is in flight.
 pub fn send_ctrl_c(pid: u32) {
+    // AttachConsole reassigns this process's standard handles to the target
+    // console, and the following FreeConsole (the GUI launcher detaches) leaves
+    // them pointing at the child's — now dying — console. After that, eprintln
+    // writes vanish into the hidden console and any stdio-inheriting spawn
+    // fails with ERROR_INVALID_HANDLE. Capture the originals and put them back
+    // when the signalling is done.
+    // SAFETY: GetStdHandle is always safe to call; returns a handle or invalid.
+    let (stdin_orig, stdout_orig, stderr_orig) = unsafe {
+        (
+            GetStdHandle(STD_INPUT_HANDLE).unwrap_or_default(),
+            GetStdHandle(STD_OUTPUT_HANDLE).unwrap_or_default(),
+            GetStdHandle(STD_ERROR_HANDLE).unwrap_or_default(),
+        )
+    };
     // SAFETY: best-effort console signalling; failures are ignored.
     unsafe {
-        // Ignore Ctrl+C for this process (handler=NULL + add=TRUE),
-        // then restore the default handler afterwards.
+        // Ignore Ctrl+C for this process (handler=NULL + add=TRUE), then
+        // restore the default handler afterwards.
         let _ = SetConsoleCtrlHandler(None, true);
         let _ = FreeConsole();
         if AttachConsole(pid).is_ok() {
             // The ignore flag is PER-CONSOLE: it applied to our previous
             // console above, but we just attached to the CHILD's console.
-            // Without re-ignoring here, the broadcast below delivers a
-            // CTRL_C to US as well, which the default handler turns into
-            // STATUS_CONTROL_C_EXIT (0xc000013a) — the launcher dies
-            // "on Ctrl+C" instead of exiting cleanly.
+            // Without re-ignoring here, the broadcast below delivers a CTRL_C
+            // to US as well, which the default handler turns into
+            // STATUS_CONTROL_C_EXIT (0xc000013a) — the launcher dies "on
+            // Ctrl+C" instead of exiting cleanly.
             let _ = SetConsoleCtrlHandler(None, true);
             let _ = GenerateConsoleCtrlEvent(CTRL_C_EVENT, 0);
-            // Ctrl+C delivery is asynchronous: keep ignoring briefly so
-            // the event cannot land after the ignore flag is removed.
+            // Ctrl+C delivery is asynchronous: keep ignoring briefly so the
+            // event cannot land after the ignore flag is removed.
             std::thread::sleep(std::time::Duration::from_millis(100));
             let _ = SetConsoleCtrlHandler(None, false);
             let _ = FreeConsole();
         }
         let _ = SetConsoleCtrlHandler(None, false);
+
+        // Put the standard handles back so logging and stdio-inheriting spawns
+        // keep working after the console dance.
+        let _ = SetStdHandle(STD_INPUT_HANDLE, stdin_orig);
+        let _ = SetStdHandle(STD_OUTPUT_HANDLE, stdout_orig);
+        let _ = SetStdHandle(STD_ERROR_HANDLE, stderr_orig);
     }
 }

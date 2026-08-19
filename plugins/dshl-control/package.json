@@ -1,0 +1,25 @@
+{
+  "name": "@dshl/control",
+  "version": "0.1.0",
+  "description": "dshl control bridge: connects the dsh web UI to the running dshl launcher over the control pipe (DSHL_CONTROL_URL)",
+  "type": "module",
+  "main": "src/index.js",
+  "files": [
+    "src",
+    "cordis.patch.yml",
+    "LICENSE",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT"
+}

@@ -65,3 +65,33 @@ pub fn run(cmd: &mut Command) -> io::Result<CommandResult> {
         status: Some(output.status),
     })
 }
+
+/// Convert a prepared `std::process::Command` into a `tokio::process::Command`.
+///
+/// tokio's `From<Command>` conversion carries the program, arguments, env and
+/// cwd but not the platform spawn hooks (hidden console on Windows, PDEATHSIG
+/// on Linux), so they are re-applied here.
+pub(crate) fn to_tokio(cmd: &mut Command) -> tokio::process::Command {
+    let program = cmd.get_program().to_os_string();
+    let mut tcmd = tokio::process::Command::from(std::mem::replace(cmd, Command::new(program)));
+    #[cfg(target_os = "windows")]
+    tcmd.creation_flags(0x0800_0000); // CREATE_NO_WINDOW
+    #[cfg(target_os = "linux")]
+    unsafe {
+        tcmd.pre_exec(|| {
+            libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
+            Ok(())
+        });
+    }
+    tcmd
+}
+
+/// Run a command to completion asynchronously, capturing stdout/stderr.
+pub async fn run_async(cmd: &mut Command) -> io::Result<CommandResult> {
+    let output = to_tokio(cmd).output().await?;
+    Ok(CommandResult {
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        status: Some(output.status),
+    })
+}

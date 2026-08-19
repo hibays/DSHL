@@ -49,6 +49,13 @@ pub fn request_shutdown() {
     state::SHOULD_EXIT.store(true, Ordering::SeqCst);
 }
 
+/// Whether a shutdown was requested (and not yet acted on). Used by the
+/// control-plane tests to assert the wire `shutdown` reached the launcher.
+#[cfg(test)]
+pub(crate) fn shutdown_requested() -> bool {
+    state::SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
+}
+
 /// Close the window's keep-alive WebSocket so its webui server can stop. Safe
 /// to call any number of times (the handle is taken once).
 pub(crate) fn stop_keepalive() {

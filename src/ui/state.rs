@@ -65,6 +65,10 @@ pub(crate) static CRASH_RESTART_NOW: AtomicBool = AtomicBool::new(false);
 /// Set by the launch worker after a crash; the UI event loop (main thread)
 /// navigates back to the launcher page / restores the tray window.
 pub(crate) static CRASH_NAVIGATE_PENDING: AtomicBool = AtomicBool::new(false);
+/// Set by a control-plane `restart` request: the supervised dsh is asked to
+/// exit, and when its supervisor observes a clean exit it relaunches instead
+/// of shutting the launcher down.
+pub(crate) static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// Monotonic generation of the crash-recovery run. Each new crash increments
 /// it; a superseded countdown thread notices `CRASH_GEN != its own` and exits
 /// without touching the newer banner, so back-to-back crashes never run two
