@@ -1,7 +1,7 @@
 //! Node.js: [`ensure_node`] and the install fallback chain.
 //!
-//! Node is always required — dsh runs on it regardless of the chosen `pm` or
-//! `exector` — so [`ensure_node`] does not depend on the config. The install
+//! Node is always required — dsh runs on it regardless of the chosen `pm` —
+//! so [`ensure_node`] does not depend on the config. The install
 //! chain is: existing fnm → `cargo install fnm` → nvm → best-effort fnm
 //! auto-install into `~/.cache/bin` → tell the UI to install fnm manually.
 
@@ -23,6 +23,7 @@ use super::{FNM_GUIDE_URL, NODE_INSTALL_VERSION, NODE_MIN};
 /// contains the `node` executable.
 pub async fn ensure_node(mirror: &MirrorConfig) -> Result<PathBuf> {
     let node = probe::node().await;
+    let mut reuse_cache = false;
     if node.found {
         if let Some(v) = node.version {
             if v >= NODE_MIN {
@@ -52,6 +53,13 @@ pub async fn ensure_node(mirror: &MirrorConfig) -> Result<PathBuf> {
         }
     } else {
         progress::log(t!("install.node.not_found"));
+        reuse_cache = true;
+    }
+    // Reuse a node we installed into the cache on an earlier run, even though
+    // it is not on the ambient PATH.
+    if reuse_cache && let Some(dir) = find_node_bin() {
+        progress::log(t!("install.node.cached", dir = dir.display()));
+        return Ok(dir);
     }
     install_node(mirror).await
 }
@@ -59,6 +67,19 @@ pub async fn ensure_node(mirror: &MirrorConfig) -> Result<PathBuf> {
 /// Install node `NODE_INSTALL_VERSION` through the fallback chain.
 async fn install_node(mirror: &MirrorConfig) -> Result<PathBuf> {
     progress::log(t!("install.node.starting", version = NODE_INSTALL_VERSION));
+
+    // Arch Linux manages the toolchain with pacman; the user installs node
+    // themselves (CLI autonomy) instead of dshl downloading fnm/binaries.
+    if platform::distro() == platform::Distro::Arch {
+        progress::log(t!("install.node.arch_pacman"));
+        return Err(Error(
+            t!(
+                "install.node.arch_pacman_fatal",
+                version = NODE_INSTALL_VERSION
+            )
+            .to_string(),
+        ));
+    }
 
     // 1. fnm already present
     if let Some(fnm) = platform::which("fnm") {
@@ -122,6 +143,9 @@ async fn install_node(mirror: &MirrorConfig) -> Result<PathBuf> {
 async fn install_node_with_fnm(fnm: &Path, mirror: &MirrorConfig) -> Result<PathBuf> {
     let mut cmd = Command::new(fnm);
     cmd.args(["install", NODE_INSTALL_VERSION]);
+    // Route node into dshl's cache (fnm's default is ~/.fnm) so the whole
+    // toolchain stays self-contained under the cache, not the user's home.
+    cmd.env("FNM_DIR", fnm_home());
     process::with_env(&mut cmd, &mirror.fnm_env());
     run_streaming(cmd, "fnm install").await?;
 
@@ -133,20 +157,22 @@ async fn install_node_with_fnm(fnm: &Path, mirror: &MirrorConfig) -> Result<Path
 }
 
 async fn install_fnm_via_cargo(mirror: &MirrorConfig) -> Result<PathBuf> {
+    // Install into dshl's cache (never the user's ~/.cargo/bin): `--root`
+    // places the binary at <root>/bin/fnm.
+    let root = crate::platform::cache_dir().join("dshl").join("fnm-cargo");
+    let bin_dir = root.join("bin");
+    std::fs::create_dir_all(&bin_dir).ok();
     let mut cmd = Command::new("cargo");
-    cmd.args(["install", "fnm"]);
+    cmd.args(["install", "--root"]);
+    cmd.arg(&root);
+    cmd.arg("fnm");
     process::with_env(&mut cmd, &mirror.cargo_env());
     run_streaming(cmd, "cargo install fnm").await?;
 
-    // fnm lands in ~/.cargo/bin
-    if let Some(home) = platform::home_dir() {
-        let candidate = home
-            .join(".cargo")
-            .join("bin")
-            .join(platform::with_ext("fnm"));
-        if candidate.is_file() {
-            return Ok(candidate);
-        }
+    // fnm lands in <root>/bin
+    let candidate = bin_dir.join(platform::with_ext("fnm"));
+    if candidate.is_file() {
+        return Ok(candidate);
     }
     if let Some(p) = platform::which("fnm") {
         return Ok(p);
@@ -190,6 +216,12 @@ async fn install_node_with_nvm(mirror: &MirrorConfig) -> Result<PathBuf> {
     Err(Error(t!("install.node.nvm_no_dir").to_string()))
 }
 
+/// The dshl cache dir that holds the node data we install via fnm
+/// (`<cache>/dshl/fnm`), so the whole toolchain stays under the cache.
+fn fnm_home() -> PathBuf {
+    crate::platform::cache_dir().join("dshl").join("fnm")
+}
+
 /// Recursively search for a directory containing `node`/`node.exe` under the
 /// fnm/nvm install roots.
 fn find_node_bin() -> Option<PathBuf> {
@@ -198,6 +230,7 @@ fn find_node_bin() -> Option<PathBuf> {
         roots.push(home.join(".fnm").join("node-versions"));
         roots.push(home.join(".nvm").join("versions").join("node"));
     }
+    roots.push(fnm_home().join("node-versions"));
     if let Ok(appdata) = std::env::var("APPDATA") {
         let appdata = PathBuf::from(appdata);
         roots.push(appdata.join("fnm").join("node-versions"));

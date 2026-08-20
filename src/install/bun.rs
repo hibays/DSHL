@@ -1,9 +1,9 @@
 //! Bun: [`ensure_bun`] and the install fallback chain.
 //!
-//! Bun is installed only when the config's `pm`/`exector` asks for it. Chain:
+//! Bun is installed only when the config's `pm` asks for it. Chain:
 //! direct binary download (bun-download mirror → github proxy → github) →
-//! official install script → `npm i -g bun` (respects the npm registry
-//! mirror).
+//! official install script → npm install into dshl's cache (respects the npm
+//! registry mirror). Never installed globally.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -44,6 +44,23 @@ pub async fn ensure_bun(config: &Config, mirror: &MirrorConfig) -> Result<Option
         progress::log(t!("install.bun.not_found"));
     }
 
+    // Reuse a bun we installed into the cache on an earlier run, even though
+    // it is not on the ambient PATH.
+    let cache = crate::platform::cache_dir();
+    for dir in [
+        cache.join("bun").join("bin"),
+        cache
+            .join("dshl")
+            .join("bun-npm")
+            .join("node_modules")
+            .join(".bin"),
+    ] {
+        if dir.join(platform::with_ext("bun")).is_file() {
+            progress::log(t!("install.bun.cached", dir = dir.display()));
+            return Ok(Some(dir));
+        }
+    }
+
     install_bun(mirror).await.map(Some)
 }
 
@@ -51,6 +68,13 @@ async fn install_bun(mirror: &MirrorConfig) -> Result<PathBuf> {
     let install_dir = platform::cache_dir().join("bun");
     let bin = install_dir.join("bin");
     std::fs::create_dir_all(&install_dir).map_err(|e| Error(e.to_string()))?;
+
+    // Arch Linux manages bun with pacman; the user installs it themselves
+    // (CLI autonomy) instead of dshl downloading a binary.
+    if platform::distro() == platform::Distro::Arch {
+        progress::log(t!("install.bun.arch_pacman"));
+        return Err(Error(t!("install.bun.arch_pacman_fatal").to_string()));
+    }
 
     // 1. Direct binary download. Resolution order:
     //    a) `bun-download` mirror (highest priority),
@@ -94,16 +118,19 @@ async fn install_bun(mirror: &MirrorConfig) -> Result<PathBuf> {
         return Ok(bin);
     }
 
-    // 3. npm fallback (respects the npm registry mirror).
+    // 3. npm fallback into dshl's cache (never `-g`), respects the npm mirror.
     progress::log(t!("install.bun.script_failed"));
+    let npm_prefix = crate::platform::cache_dir().join("dshl").join("bun-npm");
+    std::fs::create_dir_all(&npm_prefix).ok();
     let mut npm = Command::new(platform::tool("npm"));
-    npm.args(["install", "-g", "bun"]);
+    npm.args(["install", "--prefix"]);
+    npm.arg(&npm_prefix);
+    npm.args(["--no-save", "bun"]);
     process::with_env(&mut npm, &mirror.npm_env());
-    run_streaming(npm, "npm i -g bun").await?;
-    if let Some(p) = platform::which("bun")
-        && let Some(parent) = p.parent()
-    {
-        return Ok(parent.to_path_buf());
+    run_streaming(npm, "npm install bun").await?;
+    let bin = npm_prefix.join("node_modules").join(".bin");
+    if bin.join(platform::with_ext("bun")).is_file() {
+        return Ok(bin);
     }
 
     Err(Error(t!("install.bun.failed").to_string()))

@@ -47,7 +47,7 @@ DSHL 是一个轻量的原生启动器，以 [webui.me](https://webui.me) 作为
 | 工具   | 版本          | 是否必需                                   |
 |--------|---------------|--------------------------------------------|
 | Node   | `>= 24.15.0`  | **始终**（缺失时安装 `26`）                |
-| Bun    | `>= 1.3.14`   | 仅当 `pm = "bun"` / `exector = "bunx"` 时  |
+| Bun    | `>= 1.3.14`   | 仅当 `pm = "bun"` 时                      |
 | fnm    | 任意          | 首选 Node 版本管理器                       |
 | cargo  | 任意          | 用于回退执行 `cargo install fnm`           |
 | nvm    | 任意          | 最后的受管回退                             |
@@ -112,11 +112,10 @@ github         = ""                                   # 代理前缀，如 https
 
 [dsh]
 flags       = "--profile web --host 127.0.0.1 --port 0"
-mode        = "install"   # install | x
-pm          = "npm"       # npm | bun | pnpm  （install 模式）
-exector     = "npx"       # npx | bunx | pnpx（x 模式）
+mode        = "hybrid"    # global | hybrid | private
+pm          = "npm"       # npm | bun | pnpm
 version     = "latest"    # "latest" = 无后缀，否则 @deepseek-ai/dsh@<version>
-auto-update = true        # 自动更新 @deepseek-ai/dsh（两种模式都生效）
+auto-update = true        # 自动更新 @deepseek-ai/dsh
 single-instance = false   # true = 检测到其他 dsh 实例在运行时拒绝启动（防双写）
 
 [ui]
@@ -128,26 +127,26 @@ single-instance = false # true = 只允许一个 dshl 实例；第二个实例�
 镜像地址为空表示**不使用**该镜像。镜像始终临时生效（环境变量 / CLI 标志），
 从不写入任何全局配置。
 
-### 模式
+### 模式（`dsh.mode`）
 
-- `install` — 检查已安装的 `dsh`（及版本）；缺失或不匹配时用配置的 `pm` 安装
-  `@deepseek-ai/dsh`（`bun add -g --ignore-scripts`、`npm i -g`、`pnpm add -g`），
-  然后运行 `dsh`。
-- `x` — 直接用 `npx` / `bunx` / `pnpx` 运行（npx/pnpx 使用 `--yes`）。目标使用
-  **裸名 `dsh`**（锁定版本时为 `dsh@<version>`）：`bunx dsh` 会直接解析已安装的
-  `dsh` 命令（如 bun 全局安装的 `~/.bun/bin/dsh`），不经过注册表，避免在
-  `bunx @deepseek-ai/dsh` 下出现的 "Resolving dependencies" 卡死；需要下载时走
-  配置的 npm 镜像。runner 启动失败且本机已安装 dsh 时，回退为直接执行 `dsh`。
+dsh 的来源：
+
+- `global` — 严格使用 PATH 上的全局 `dsh`；缺失时直接报错（不安装）。适合自己
+  管理 dsh 的用户。
+- `hybrid`（默认）— 优先使用全局 `dsh`；缺失或不符合锁定的 `version` 时，把
+  `@deepseek-ai/dsh` 装进 dshl 私有缓存，以 `node <入口>` 运行。绝不 `-g`。
+- `private` — 始终装入 dshl 的缓存（`<cache>/dshl/node_modules`），完全不碰
+  全局环境与 PATH。
 
 ### 自动更新
 
 `auto-update`（默认 `true`）在未锁定版本（`version = "latest"`）时让
 `@deepseek-ai/dsh` 保持最新：
 
-- **install 模式** — 每次启动查询 registry 的最新版本，若已安装版本更旧则重装
-  （最多 5 秒；离线时静默跳过）。
-- **x 模式** — 运行器默认拉取最新；`auto-update = false` 时 npx/pnpx 使用
-  `--prefer-offline`（缓存副本）。
+- 在 `hybrid`/`private` 模式下，每次启动查询 registry 的最新版本，若缓存副本
+  更旧则重装（最多 5 秒；离线时静默跳过）。`hybrid` 模式下仅当全局 dsh 已是最新
+  时才使用它。
+- `global` 模式不受 auto-update 影响——全局安装归你自己管理。
 
 `auto-update = false` 时，启动器仅在 dsh 缺失时安装，之后不再更新。锁定的
 `version`（如 `1.2.3`）始终优先，不受 `auto-update` 影响。

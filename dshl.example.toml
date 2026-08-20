@@ -23,18 +23,19 @@ github = ""
 [dsh]
 # Flags forwarded to dsh (boot the web profile on an ephemeral port).
 flags = "--profile web --host 127.0.0.1 --port 0"
-# install = `bun add -g`/`npm i -g`/`pnpm add -g` then run `dsh`;
-# x       = run directly via npx / bunx / pnpx.
-mode = "install"
-# Package manager for install mode: npm / bun / pnpm.
-# pnpm is auto-installed via `npm i -g pnpm` when missing.
+# Package manager used to install @deepseek-ai/dsh into dshl's cache:
+# npm / bun / pnpm. (pnpm is auto-installed when it is the chosen pm.)
 pm = "npm"
-# Runner prefix for x mode: npx / bunx / pnpx.
-exector = "npx"
 # Version suffix for @deepseek-ai/dsh. "latest" = no suffix.
 version = "latest"
+# Where dsh comes from:
+#   global  = strictly the global dsh on your PATH; error if missing
+#   hybrid  = prefer the global dsh, install into dshl's cache when absent
+#             or the pinned version does not match (default)
+#   private = always dshl's private cache install, never touch the global env
+mode = "hybrid"
 # Keep @deepseek-ai/dsh up-to-date automatically.
-#   true  = check for a newer release and update (install), or fetch latest (x)
+#   true  = when `version` is "latest", check for a newer release and update
 #   false = use the installed / cached version, never update
 auto-update = true
 # Only allow one dsh instance on this machine.

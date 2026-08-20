@@ -3,7 +3,7 @@
 //! 1. [`system`]       — OS / architecture.
 //! 2. [`runtime_env`]  — node/bun (and fnm/cargo/nvm) with the fallback chain.
 //! 3. [`mirror_check`] — domestic-mirror decision (already resolved, reported here).
-//! 4. [`prepare`]      — install `@deepseek-ai/dsh` (install mode) or resolve the `npx`/`bunx`/`pnpx` runner (x mode).
+//! 4. [`prepare`]      — make sure `dsh` is available (global or cache install) and build its launch command.
 //! 5. [`launch`]       — spawn `dsh` (managed), capture its URL, return it.
 
 use std::sync::Arc;
@@ -65,40 +65,9 @@ pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Launch> {
     run_step!("system", system::run());
     let runtime = run_step!("runtime", runtime_env::run(config, mirror));
     run_step!("mirror", mirror_check::run(mirror));
-    let (command, fallback) = run_step!("dsh", prepare::run(config, mirror, &runtime));
+    let command = run_step!("dsh", prepare::run(config, mirror, &runtime));
 
-    let launch = match launch::run(command).await {
-        Ok(launch) => launch,
-        Err(err) => {
-            // The primary run failed: retry once through the fallback command
-            // before giving up.
-            let Some(fallback) = fallback else {
-                return Err(err);
-            };
-            progress::log(t!("flow.launch.retry_runner", err = err.to_string()));
-            // Stop the failed attempt's child first. It is usually already
-            // dead (early exit), but on a URL timeout it is still running —
-            // starting a second dsh next to it would make two processes write
-            // the same session log and corrupt it. Ask it to shut down
-            // gracefully (Ctrl+C) and WAIT; if it does not exit on its own,
-            // abort the fallback rather than starting a second dsh next to it
-            // (two writers on the same session log corrupt it permanently).
-            let stale = crate::DSH_CHILD.lock().unwrap().take();
-            if let Some(child) = stale
-                && !child.graceful_kill(10_000).await
-            {
-                progress::log(t!("flow.launch.stale_no_exit"));
-                // The old dsh is still running. Put it back into the global
-                // slot so a later retry (`launch_flow`) finds it and stops it
-                // via Ctrl+C before starting a new dsh — two processes writing
-                // the same session log corrupt it permanently ("seq gap") and
-                // the chat history becomes unloadable.
-                *crate::DSH_CHILD.lock().unwrap() = Some(child);
-                return Err(err);
-            }
-            run_step!("launch", launch::run(fallback))
-        }
-    };
+    let launch = launch::run(command).await?;
 
     Ok(launch)
 }

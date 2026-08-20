@@ -1,8 +1,7 @@
 // @dshl/control — the dshl control bridge plugin.
 //
-// Runs inside dsh (as a Cordis plugin row). It reads the launcher's control
-// endpoint from DSHL_CONTROL_URL, connects over the local NDJSON pipe, and
-// exposes the launcher's native actions to the dsh web UI:
+// Runs inside dsh (as a Cordis plugin row). It drives the launcher's native
+// actions and exposes them to the dsh web UI:
 //
 //   * `desktopActions` Cordis service (the desktop-app contract, so a future
 //     community-market integration can reuse it unchanged);
@@ -10,11 +9,15 @@
 //     calls to trigger open-terminal / restart / shutdown;
 //   * an index tap that injects the floating action bar into the web UI.
 //
-// Nothing here ships native code: it is the pure-JS (Backend A) half of the
-// dual-track architecture.
+// It is the pluggable half of the dual-track architecture. In the plugin-only
+// track (no launcher), the optional `.node` addon (Backend B, napi-rs) supplies
+// the OS primitives directly; in the launcher track it talks to dshl over the
+// control pipe (DSHL_CONTROL_URL). Open-terminal prefers the addon when present
+// and falls back to the pipe; restart/shutdown always go through the pipe.
 
 import { readFileSync } from 'node:fs'
 import { ControlClient } from './client.js'
+import { native } from './native.js'
 
 export const name = 'dshl-control'
 export const inject = ['webServer']
@@ -65,27 +68,40 @@ function asPost(req, res) {
 }
 
 export function apply(ctx) {
+  // The control pipe is optional: the plugin works standalone (plugin-only
+  // install) by driving native actions through the bundled `.node` addon, and
+  // talks to a launcher only when DSHL_CONTROL_URL is present.
   const endpoint = process.env.DSHL_CONTROL_URL
-  if (!endpoint) {
-    ctx.logger.warn('[dshl-control] DSHL_CONTROL_URL is not set; bridge disabled')
-    return
+  let client = null
+  if (endpoint) {
+    try {
+      client = new ControlClient(endpoint, ctx.logger)
+    } catch (cause) {
+      ctx.logger.warn(`[dshl-control] invalid DSHL_CONTROL_URL: ${cause instanceof Error ? cause.message : cause}`)
+    }
   }
-  let client
-  try {
-    client = new ControlClient(endpoint, ctx.logger)
-  } catch (cause) {
-    ctx.logger.warn(`[dshl-control] invalid DSHL_CONTROL_URL: ${cause instanceof Error ? cause.message : cause}`)
-    return
+  if (client !== null) ctx.effect(() => () => client.dispose())
+
+  // Open a terminal: prefer the local addon (works with or without a launcher),
+  // fall back to the control pipe. PATH is whatever the launcher injected into
+  // dsh, so the new terminal inherits the dsh runtime environment.
+  const openTerminal = async (path) => {
+    if (native !== null && native.openTerminal({ cwd: process.cwd(), path: path ?? process.env.PATH })) {
+      return true
+    }
+    if (client === null) throw new Error('dshl launcher is not available')
+    await client.request('open-terminal', {})
+    return true
   }
-  ctx.effect(() => () => client.dispose())
 
   // Desktop-contract service: a future community-market bundle picks these up
   // via `ctx.inject(['desktopActions'], ...)` exactly like the desktop app.
   ctx.provide('desktopActions', {
     openTerminal() {
-      void client.request('open-terminal', {})
+      void openTerminal(process.env.PATH)
     },
     requestRestart() {
+      if (client === null) return Promise.reject(new Error('dshl launcher is not available'))
       return client.request('restart', {})
     },
   })
@@ -109,7 +125,7 @@ export function apply(ctx) {
     ctx.webServer.register({ kind: 'exact', path: ROUTES.openTerminal, handler: async (req, res) => {
       if (!asPost(req, res)) return
       try {
-        await client.request('open-terminal', {})
+        await openTerminal(process.env.PATH)
         sendJson(res, 200, { ok: true })
       } catch (cause) {
         sendJson(res, 502, { error: cause instanceof Error ? cause.message : String(cause) })
@@ -122,12 +138,12 @@ export function apply(ctx) {
       // off mid-flight. The pipe request is still delivered; the UI treats a
       // dropped connection as success.
       sendJson(res, 200, { ok: true })
-      void client.request('restart', {})
+      if (client !== null) void client.request('restart', {})
     }}),
     ctx.webServer.register({ kind: 'exact', path: ROUTES.shutdown, handler: async (req, res) => {
       if (!asPost(req, res)) return
       sendJson(res, 200, { ok: true })
-      void client.request('shutdown', {})
+      if (client !== null) void client.request('shutdown', {})
     }}),
     ctx.webServer.register({ kind: 'exact', path: ROUTES.ui, handler: async (_req, res) => {
       res.statusCode = 200
@@ -147,7 +163,10 @@ export function apply(ctx) {
     html.replace('</body>', `<script src="${ROUTES.ui}" defer></script></body>`),
   )
 
-  ctx.logger.info(`[dshl-control] bridge active at ${endpoint}`)
+  ctx.logger.info(
+    `[dshl-control] bridge active${client !== null ? ` at ${endpoint}` : ''}` +
+      (native !== null ? ' (native addon: on)' : ' (native addon: off)'),
+  )
 }
 
 let cachedUiScript

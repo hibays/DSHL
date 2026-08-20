@@ -61,7 +61,7 @@ runtime.
 | Tool   | Version        | Required?                                   |
 |--------|----------------|---------------------------------------------|
 | Node   | `>= 24.15.0`   | **always** (installs `26` if missing)       |
-| Bun    | `>= 1.3.14`    | only when `pm = "bun"` / `exector = "bunx"` |
+| Bun    | `>= 1.3.14`    | only when `pm = "bun"` |
 | fnm    | any            | preferred Node version manager              |
 | cargo  | any            | used to `cargo install fnm` as fallback     |
 | nvm    | any            | last managed fallback                       |
@@ -132,11 +132,10 @@ github         = ""                                   # proxy prefix, e.g. https
 
 [dsh]
 flags       = "--profile web --host 127.0.0.1 --port 0"
-mode        = "install"   # install | x
-pm          = "npm"       # npm | bun | pnpm  (install mode)
-exector     = "npx"       # npx | bunx | pnpx (x mode)
+mode        = "hybrid"    # global | hybrid | private
+pm          = "npm"       # npm | bun | pnpm
 version     = "latest"    # "latest" = no suffix, else @deepseek-ai/dsh@<version>
-auto-update = true        # keep @deepseek-ai/dsh up-to-date (both modes)
+auto-update = true        # keep @deepseek-ai/dsh up-to-date
 single-instance = false   # true = refuse to start dsh while another dsh is running (no dual-writer)
 
 [ui]
@@ -149,29 +148,29 @@ An empty mirror address means that mirror is **not used**. Mirrors are applied
 temporarily (environment variables / CLI flags) and are never written to any
 global config.
 
-### Modes
+### Modes (`dsh.mode`)
 
-- `install` — check the installed `dsh` (and version); if missing/wrong,
-  install `@deepseek-ai/dsh` with the configured `pm`
-  (`bun add -g --ignore-scripts`, `npm i -g`, `pnpm add -g`), then run `dsh`.
-- `x` — run directly via `npx` / `bunx` / `pnpx` (npx/pnpx use `--yes`). The
-  target is the **bare `dsh` name** (`dsh@<version>` when pinned): `bunx dsh`
-  resolves the already-installed `dsh` command (e.g. bun's global
-  `~/.bun/bin/dsh`) without a registry round-trip, avoiding the
-  "Resolving dependencies" stall of `bunx @deepseek-ai/dsh`; any download
-  goes through the configured npm mirror. If the runner fails to start and
-  `dsh` is installed, the launcher falls back to running `dsh` directly.
+Where dsh comes from:
+
+- `global` — strictly the global `dsh` on your PATH; the launcher errors out
+  (instead of installing) when it is missing. For users who manage dsh
+  themselves.
+- `hybrid` (default) — prefer the global `dsh`; when it is missing or does not
+  satisfy the pinned `version`, install `@deepseek-ai/dsh` into dshl's private
+  cache and run it as `node <entry>`. Never `-g`.
+- `private` — always install into dshl's cache (`<cache>/dshl/node_modules`),
+  never touching your global environment or PATH.
 
 ### Auto-update
 
 `auto-update` (default `true`) keeps `@deepseek-ai/dsh` current when no version
 is pinned (`version = "latest"`):
 
-- **install mode** — on each launch the launcher queries the registry for the
-  latest version and reinstalls if the installed one is older (capped at 5s;
-  skipped silently when offline).
-- **x mode** — the runner fetches the latest by default; with
-  `auto-update = false` npx/pnpx use `--prefer-offline` (cached copy).
+- In `hybrid`/`private` mode, on each launch the launcher queries the registry
+  for the latest version and reinstalls the cache copy when it is older (capped
+  at 5s; skipped silently when offline). In `hybrid` mode the global dsh is used
+  only when it is already up to date.
+- `global` mode is untouched by auto-update — you own the global install.
 
 With `auto-update = false`, the launcher only installs dsh if it is missing and
 never updates it afterwards. A pinned `version` (`1.2.3`) is always respected

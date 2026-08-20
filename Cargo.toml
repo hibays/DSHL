@@ -11,7 +11,7 @@ categories.workspace = true
 
 [workspace]
 resolver = "3"
-members = [".", "crates/dshl"]
+members = [".", "crates/dshl", "crates/dshl-native"]
 
 [workspace.package]
 version = "0.1.0"

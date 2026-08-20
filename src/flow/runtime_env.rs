@@ -73,15 +73,30 @@ pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Runtime> {
     // Bun only when the config asks for it.
     let bun_dir = install::ensure_bun(config, mirror).await?;
 
-    // pnpm only when the config asks for it (pm=pnpm / pnpx). The returned
-    // dirs are where pnpm links global bins — prepend them to PATH so a
-    // freshly installed dsh is reachable even when they are not on PATH.
-    let pnpm_dirs = install::ensure_pnpm(config, mirror, &node_dir).await?;
+    // pnpm only when the config asks for it (pm=pnpm). The returned dirs are
+    // where pnpm lives — prepend them to PATH so a freshly installed pnpm is
+    // reachable even when it is not on PATH.
+    let mut extra_path = install::ensure_pnpm(config, mirror, &node_dir).await?;
+
+    // fnm binaries dshl may have installed into the cache (cargo --root, or
+    // the ~/.cache/bin auto-install) — put them on the runtime PATH too so the
+    // whole toolchain stays reachable without the user's global PATH.
+    for dir in [
+        crate::platform::cache_dir()
+            .join("dshl")
+            .join("fnm-cargo")
+            .join("bin"),
+        crate::platform::bin_dir(),
+    ] {
+        if dir.is_dir() && !extra_path.contains(&dir) {
+            extra_path.push(dir);
+        }
+    }
 
     progress::step("runtime", StepStatus::Done, t!("flow.runtime.ready"));
     Ok(Runtime {
         node_dir: Some(node_dir),
         bun_dir,
-        extra_path: pnpm_dirs,
+        extra_path,
     })
 }

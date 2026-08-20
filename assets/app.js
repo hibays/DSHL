@@ -106,7 +106,6 @@ function renderConfig(state) {
       ["auto-mirror", cfg.auto_mirror],
       ["dsh.mode", cfg.dsh && cfg.dsh.mode],
       ["dsh.pm", cfg.dsh && cfg.dsh.pm],
-      ["dsh.exector", cfg.dsh && cfg.dsh.exector],
       ["dsh.version", cfg.dsh && cfg.dsh.version],
       ["dsh.flags", cfg.dsh && cfg.dsh.flags],
     ];

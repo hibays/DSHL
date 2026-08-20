@@ -18,15 +18,20 @@ pub enum MirrorMode {
     Force,
 }
 
-/// How dsh should be obtained / executed.
+/// Where dsh comes from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum DshMode {
-    /// Install `@deepseek-ai/dsh` globally, then run the `dsh` binary.
+    /// Strictly the user's global `dsh`; error out if it is not installed.
+    /// No cache install is ever made.
+    Global,
+    /// Prefer the user's global `dsh`, falling back to dshl's cache install
+    /// when none is present (or it does not satisfy the pinned `version`).
     #[default]
-    Install,
-    /// Run directly via `npx` / `bunx` / `pnpx`.
-    X,
+    Hybrid,
+    /// Always dshl's private cache install; never touch the user's global
+    /// environment or PATH.
+    Private,
 }
 
 /// JavaScript package manager used for installing dsh.
@@ -37,16 +42,6 @@ pub enum Pm {
     Npm,
     Bun,
     Pnpm,
-}
-
-/// Package-runner prefix used in `x` mode.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-#[serde(rename_all = "lowercase")]
-pub enum Exector {
-    #[default]
-    Npx,
-    Bunx,
-    Pnpx,
 }
 
 /// Domestic mirror addresses. An empty string means "do not use this mirror".
@@ -74,21 +69,18 @@ pub struct Dsh {
     /// Flags forwarded to `dsh` (default boots the web profile on an
     /// ephemeral port).
     pub flags: String,
-    /// `install` (default) or `x`.
-    pub mode: DshMode,
-    /// Package manager for the install mode: `npm` / `bun` / `pnpm`.
+    /// Package manager used to install `@deepseek-ai/dsh` and (on demand)
+    /// pnpm/bun: `npm` / `bun` / `pnpm`.
     pub pm: Pm,
-    /// Runner prefix for the `x` mode: `npx` / `bunx` / `pnpx`.
-    #[serde(alias = "executor")]
-    pub exector: Exector,
     /// Version suffix for `@deepseek-ai/dsh`. `latest` (default) means no
     /// suffix; anything else becomes `@deepseek-ai/dsh@<version>`.
     pub version: String,
+    /// Where dsh comes from: `global` / `hybrid` / `private` (see [`DshMode`]).
+    pub mode: DshMode,
     /// Keep `@deepseek-ai/dsh` up-to-date automatically.
     ///
     /// * `true` (default): when `version` is `latest`, the launcher checks for
-    ///   a newer release and updates it (install mode), or lets the runner
-    ///   fetch the latest (x mode).
+    ///   a newer release and installs it into the cache.
     /// * `false`: use the already-installed / cached version and never update.
     #[serde(rename = "auto-update")]
     pub auto_update: bool,
@@ -105,10 +97,9 @@ impl Default for Dsh {
     fn default() -> Self {
         Self {
             flags: "--profile web --host 127.0.0.1 --port 0".to_string(),
-            mode: DshMode::Install,
             pm: Pm::Npm,
-            exector: Exector::Npx,
             version: "latest".to_string(),
+            mode: DshMode::Hybrid,
             auto_update: true,
             single_instance: false,
         }
@@ -130,14 +121,14 @@ impl Dsh {
         }
     }
 
-    /// True when the chosen pm/runner needs bun installed.
+    /// True when the chosen pm needs bun installed.
     pub fn needs_bun(&self) -> bool {
-        self.pm == Pm::Bun || self.exector == Exector::Bunx
+        self.pm == Pm::Bun
     }
 
-    /// True when the chosen pm/runner needs pnpm installed.
+    /// True when the chosen pm needs pnpm installed.
     pub fn needs_pnpm(&self) -> bool {
-        self.pm == Pm::Pnpm || self.exector == Exector::Pnpx
+        self.pm == Pm::Pnpm
     }
 }
 

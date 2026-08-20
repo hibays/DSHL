@@ -1,0 +1,19 @@
+[package]
+name = "dshl-native"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "dshl plugin-track native addon (napi-rs): open-terminal / open-path / open-url / platform info for the @dshl/control plugin."
+repository.workspace = true
+keywords.workspace = true
+categories.workspace = true
+
+# napi-rs cdylib: builds to a per-platform `dshl_native.dll/.so/.dylib` that the
+# packaging step renames to `dshl-native.<platform>-<arch>.node` for Node.
+[lib]
+crate-type = ["cdylib"]
+name = "dshl_native"
+
+[dependencies]
+napi = { version = "2", default-features = false, features = ["napi8"] }
+napi-derive = "2"

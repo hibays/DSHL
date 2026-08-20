@@ -2,7 +2,7 @@
 //!
 //! Importance order (highest first): nodejs → bun → fnm → cargo → nvm.
 //!   * nodejs is **required** (dsh runs on Node); min 24.15.0, we install 26.
-//!   * bun is installed only when the config's `pm`/`exector` asks for it.
+//!   * bun is installed only when the config's `pm` asks for it.
 //!   * node 26 is installed via fnm first, then `cargo install fnm`, then nvm,
 //!     then a best-effort fnm auto-install into `~/.cache/bin`; if everything
 //!     fails the UI is told to install fnm manually.

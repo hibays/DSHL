@@ -1,10 +1,9 @@
 //! pnpm: [`ensure_pnpm`] and global-bin-dir resolution.
 //!
-//! pnpm is installed through `npm i -g pnpm` when missing — node (and with it
-//! npm) is always present at that point. The global bin directory/ies (where
-//! `pnpm add -g` links executables) are resolved so the caller can prepend
-//! them to PATH; a freshly installed pnpm is not on the ambient PATH and
-//! neither is the dsh it links.
+//! pnpm is installed through `npm install --prefix <cache>/dshl/pnpm` when
+//! missing — node (and with it npm) is always present at that point. The bin
+//! directory of the cache install is returned so the caller can prepend it to
+//! the runtime PATH; a freshly installed pnpm is not on the ambient PATH.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,8 +19,11 @@ use crate::progress;
 use super::runtime::Runtime;
 use super::stream::run_streaming;
 
-/// Ensure pnpm is installed when the config requires it (`pm = "pnpm"` or
-/// `exector = "pnpx"`).
+/// Ensure pnpm is installed when the config requires it (`pm = "pnpm"`).
+///
+/// pnpm is never `-g` installed: when missing it is installed into dshl's own
+/// cache (`<cache>/dshl/pnpm`) via `npm install --prefix`, and the resulting
+/// bin dir is returned so the caller can prepend it to the runtime PATH.
 pub async fn ensure_pnpm(
     config: &Config,
     mirror: &MirrorConfig,
@@ -31,6 +33,10 @@ pub async fn ensure_pnpm(
         return Ok(Vec::new());
     }
 
+    let prefix = crate::platform::cache_dir().join("dshl").join("pnpm");
+    let cached_bin = prefix.join("node_modules").join(".bin");
+
+    // Prefer the user's own global pnpm, then a previous cache install.
     let pnpm = probe::pnpm().await;
     if pnpm.found {
         match pnpm.version {
@@ -44,23 +50,36 @@ pub async fn ensure_pnpm(
                 progress::log(t!("install.pnpm.found", path = path));
             }
         }
-    } else {
-        progress::log(t!("install.pnpm.not_found"));
-        let mut cmd = Command::new(platform::tool("npm"));
-        cmd.args(["install", "-g", "pnpm"]);
-        // The npm of a freshly installed fnm node lives in `node_dir`, which
-        // is not on the ambient PATH — augment it so the install works and
-        // the resulting pnpm is resolvable by the next step.
-        let rt = Runtime {
-            node_dir: Some(node_dir.to_path_buf()),
-            bun_dir: None,
-            extra_path: Vec::new(),
-        };
-        cmd.env("PATH", rt.augmented_path());
-        process::with_env(&mut cmd, &mirror.npm_env());
-        run_streaming(cmd, "npm i -g pnpm").await?;
+        return Ok(pnpm_bin_dirs(node_dir).await);
+    }
+    if cached_bin.join(platform::with_ext("pnpm")).is_file() {
+        progress::log(t!("install.pnpm.cached", dir = cached_bin.display()));
+        return Ok(vec![cached_bin]);
     }
 
+    progress::log(t!("install.pnpm.not_found"));
+    // Install pnpm into dshl's cache (never `-g`). The npm of a freshly
+    // installed fnm node lives in `node_dir`, which is not on the ambient
+    // PATH — augment it so the install works.
+    std::fs::create_dir_all(&prefix).ok();
+    let mut cmd = Command::new(platform::tool("npm"));
+    cmd.args(["install", "--prefix"]);
+    cmd.arg(&prefix);
+    cmd.args(["--no-save", "pnpm"]);
+    let rt = Runtime {
+        node_dir: Some(node_dir.to_path_buf()),
+        bun_dir: None,
+        extra_path: Vec::new(),
+    };
+    cmd.env("PATH", rt.augmented_path());
+    process::with_env(&mut cmd, &mirror.npm_env());
+    run_streaming(cmd, "install pnpm").await?;
+
+    if cached_bin.join(platform::with_ext("pnpm")).is_file() {
+        return Ok(vec![cached_bin]);
+    }
+    // Fall back to global-bin resolution so a pnpm that npm placed elsewhere
+    // is still found.
     Ok(pnpm_bin_dirs(node_dir).await)
 }
 

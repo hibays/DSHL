@@ -29,6 +29,14 @@ pub enum Shell {
     Sh,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Distro {
+    /// Arch Linux (and Arch-likes such as Manjaro) — package manager `pacman`.
+    Arch,
+    /// Any other Linux distribution.
+    Other,
+}
+
 /// Detect the host OS.
 pub fn os() -> Os {
     if cfg!(target_os = "windows") {
@@ -37,6 +45,37 @@ pub fn os() -> Os {
         Os::Macos
     } else {
         Os::Linux // best-effort: treat other unix-likes as linux
+    }
+}
+
+/// Detect the Linux distribution family from `/etc/os-release`.
+///
+/// Returns [`Distro::Other`] on non-Linux or when the file is unreadable. Used
+/// to decide between dshl auto-installing a tool and letting the user install
+/// it from their package manager (e.g. `sudo pacman -S nodejs` on Arch).
+pub fn distro() -> Distro {
+    if os() != Os::Linux {
+        return Distro::Other;
+    }
+    let os_release = match std::fs::read_to_string("/etc/os-release") {
+        Ok(s) => s,
+        Err(_) => return Distro::Other,
+    };
+    let is_arch = |field: &str| {
+        os_release.lines().any(|l| {
+            let Some(rest) = l.strip_prefix(field) else {
+                return false;
+            };
+            rest.starts_with('=')
+                && rest[1..]
+                    .split_whitespace()
+                    .any(|tok| tok == "arch" || tok == "manjaro")
+        })
+    };
+    if is_arch("ID") || is_arch("ID_LIKE") {
+        Distro::Arch
+    } else {
+        Distro::Other
     }
 }
 

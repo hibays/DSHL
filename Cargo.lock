@@ -181,6 +181,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "cc"
+version = "1.4.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "509591b7bcd67f4ef775afad7662703b4935daaa6ec0e5605cfb1090b32a2b6d"
+dependencies = [
+ "find-msvc-tools",
+ "shlex",
+]
+
+[[package]]
 name = "cfg-expr"
 version = "0.15.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -201,6 +211,15 @@ name = "cfg_aliases"
 version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f079e83a288787bcd14a6aea84cee5c87a67c5a3e660c30f557a3d24761b3527"
+
+[[package]]
+name = "convert_case"
+version = "0.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ec182b0ca2f35d8fc196cf3404988fd8b8c739a4d270ff118a398feb0cbec1ca"
+dependencies = [
+ "unicode-segmentation",
+]
 
 [[package]]
 name = "crc32fast"
@@ -244,6 +263,16 @@ name = "crossbeam-utils"
 version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "61803da095bee82a81bb1a452ecc25d3b2f1416d1897eb86430c6159ef717c17"
+
+[[package]]
+name = "ctor"
+version = "0.2.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32a2785755761f3ddc1492979ce1e48d2c00d09311c39e4466429188f3dd6501"
+dependencies = [
+ "quote",
+ "syn 2.0.119",
+]
 
 [[package]]
 name = "ctrlc"
@@ -323,6 +352,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "dshl-native"
+version = "0.1.0"
+dependencies = [
+ "napi",
+ "napi-derive",
+]
+
+[[package]]
 name = "either"
 version = "1.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -380,6 +417,12 @@ dependencies = [
  "memoffset",
  "rustc_version",
 ]
+
+[[package]]
+name = "find-msvc-tools"
+version = "0.1.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d45db016d36b838f563236e9193d0ee6ce38f3f68b6c94e914b4929c96bbb890"
 
 [[package]]
 name = "flate2"
@@ -824,7 +867,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e9ec52138abedcc58dc17a7c6c0c00a2bdb4f3427c7f63fa97fd0d859155caf"
 dependencies = [
  "gtk-sys",
- "libloading",
+ "libloading 0.7.4",
  "once_cell",
 ]
 
@@ -842,6 +885,16 @@ checksum = "b67380fd3b2fbe7527a606e18729d21c6f3951633d0500574c4dc22d2d638b9f"
 dependencies = [
  "cfg-if",
  "winapi",
+]
+
+[[package]]
+name = "libloading"
+version = "0.8.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d7c4b02199fee7c5d21a5ae7d8cfa79a6ef5bb2fc834d6e9058e89c825efdc55"
+dependencies = [
+ "cfg-if",
+ "windows-link",
 ]
 
 [[package]]
@@ -933,6 +986,57 @@ dependencies = [
  "png",
  "thiserror 2.0.20",
  "windows-sys",
+]
+
+[[package]]
+name = "napi"
+version = "2.16.17"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "55740c4ae1d8696773c78fdafd5d0e5fe9bc9f1b071c7ba493ba5c413a9184f3"
+dependencies = [
+ "bitflags 2.13.1",
+ "ctor",
+ "napi-derive",
+ "napi-sys",
+ "once_cell",
+]
+
+[[package]]
+name = "napi-derive"
+version = "2.16.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7cbe2585d8ac223f7d34f13701434b9d5f4eb9c332cccce8dee57ea18ab8ab0c"
+dependencies = [
+ "cfg-if",
+ "convert_case",
+ "napi-derive-backend",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "napi-derive-backend"
+version = "1.0.75"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1639aaa9eeb76e91c6ae66da8ce3e89e921cd3885e99ec85f4abacae72fc91bf"
+dependencies = [
+ "convert_case",
+ "once_cell",
+ "proc-macro2",
+ "quote",
+ "regex",
+ "semver",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "napi-sys"
+version = "2.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "427802e8ec3a734331fec1035594a210ce1ff4dc5bc1950530920ab717964ea3"
+dependencies = [
+ "libloading 0.8.9",
 ]
 
 [[package]]
@@ -1358,6 +1462,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "shlex"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
+
+[[package]]
 name = "signal-hook-registry"
 version = "1.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1771,9 +1881,18 @@ dependencies = [
 [[package]]
 name = "webui-rs"
 version = "2.5.0"
-source = "git+https://github.com/hibays/rust-webui/?branch=main#f25776c0a7948f91c6b091870030b95bfe0c8452"
+source = "git+https://github.com/hibays/rust-webui/?branch=main#592c12f63e9333a63fc822e92f911d1f65c2303d"
 dependencies = [
  "lazy_static",
+ "webui-sys",
+]
+
+[[package]]
+name = "webui-sys"
+version = "2.5.0"
+source = "git+https://github.com/hibays/rust-webui/?branch=main#592c12f63e9333a63fc822e92f911d1f65c2303d"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

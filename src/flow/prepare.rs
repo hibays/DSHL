@@ -1,15 +1,14 @@
 //! Flow 4 — make sure `dsh` is available and build its launch command.
 //!
-//! * `install` mode: check the installed `dsh` (and its version), install
-//!   `@deepseek-ai/dsh` with the configured package manager if needed, then
-//!   run the `dsh` binary.
-//! * `x` mode: run through `npx` / `bunx` / `pnpx` directly.
+//! dsh is a node script: it is always launched directly as `node <entry>`
+//! from an installed copy — either the user's global `dsh` (in `hybrid`/`global`
+//! mode) or dshl's private cache install.
 
 use std::path::PathBuf;
 use std::process::Command;
 use std::time::Duration;
 
-use crate::config::{Config, DshMode, Exector, Pm};
+use crate::config::{Config, DshMode, Pm};
 use crate::error::Result;
 use crate::install::{Runtime, run_streaming};
 use crate::mirror::MirrorConfig;
@@ -100,14 +99,6 @@ fn pm_name(pm: Pm) -> &'static str {
     }
 }
 
-fn exector_name(e: Exector) -> &'static str {
-    match e {
-        Exector::Npx => "npx",
-        Exector::Bunx => "bunx",
-        Exector::Pnpx => "pnpx",
-    }
-}
-
 /// Does the installed dsh satisfy the configured version requirement?
 ///
 /// Compared as full semantic versions (pre-release included), so
@@ -125,25 +116,152 @@ fn dsh_version_ok(tool: &probe::Tool, wanted: &str) -> bool {
     installed == wanted_v
 }
 
-async fn install_dsh(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> Result<()> {
-    let spec = config.dsh.package_spec();
+/// Probe the user's global `dsh`: ambient PATH first, then the runtime prefix.
+async fn probe_global(runtime: &Runtime) -> probe::Tool {
+    match probe::dsh().await {
+        p if p.found => p,
+        _ => probe::dsh_in(&runtime.path_prefix()).await,
+    }
+}
+
+/// Hybrid mode: use the global dsh when it satisfies `version`, else fall
+/// back to a cache install.
+async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> bool {
+    let dsh = probe_global(runtime).await;
+    if !dsh.found {
+        progress::log(t!("flow.prepare.not_installed"));
+        return false;
+    }
+    if !config.dsh.wants_latest() {
+        // Pinned version: use the global only when it matches.
+        if dsh_version_ok(&dsh, &config.dsh.version) {
+            progress::log(t!("flow.prepare.installed", installed = dsh.raw.trim()));
+            return true;
+        }
+        progress::log(t!(
+            "flow.prepare.version_mismatch",
+            wanted = config.dsh.version,
+            current = dsh.raw.trim()
+        ));
+        return false;
+    }
+    if !config.dsh.auto_update || target == "latest" {
+        // latest, but auto-update is off (or the latest could not be learned)
+        // — keep the global as-is.
+        progress::log(t!("flow.prepare.installed", installed = dsh.raw.trim()));
+        return true;
+    }
+    // latest + auto-update: use the global only if it is already up to date;
+    // otherwise fall through to a fresh cache install so a stale global dsh
+    // is not run forever.
+    match (FullVersion::parse(&dsh.raw), FullVersion::parse(target)) {
+        (Some(installed), Some(latest)) if installed >= latest => {
+            progress::log(t!(
+                "flow.prepare.up_to_date",
+                installed = installed.to_string()
+            ));
+            true
+        }
+        _ => {
+            progress::log(t!(
+                "flow.prepare.updating",
+                current = dsh.raw.trim(),
+                latest = target.to_string()
+            ));
+            false
+        }
+    }
+}
+
+/// dshl's cache install of dsh: `<cache>/dshl`. dsh is a node module, so the
+/// `--prefix` install drops it straight into `<cache>/dshl/node_modules` (the
+/// package entry at `@deepseek-ai/dsh`) — no extra per-version directory and
+/// no touch of the user's global environment or PATH. Version pinning still
+/// applies to the installed spec, but there is deliberately no version
+/// isolation — one dsh kernel per machine is enough.
+pub fn dsh_dir() -> std::path::PathBuf {
+    crate::platform::cache_dir().join("dshl")
+}
+
+/// The `.bin` dir of the cache install (holds `dsh`, `dsh.cmd`, …).
+fn dsh_bin_dir() -> std::path::PathBuf {
+    dsh_dir().join("node_modules").join(".bin")
+}
+
+/// The `@deepseek-ai/dsh` package directory inside the cache install.
+fn dsh_pkg_dir() -> std::path::PathBuf {
+    dsh_dir()
+        .join("node_modules")
+        .join("@deepseek-ai")
+        .join("dsh")
+}
+
+/// Is dsh already installed in the cache (its cli entry exists)?
+fn dsh_installed() -> bool {
+    package_entry(&dsh_pkg_dir()).is_some()
+}
+
+/// The `bin` entry of an npm package, read from its `package.json`. This is
+/// the file `node` runs (e.g. `cli.js`) — dsh is a node script, so launching
+/// it is just `node <entry>`; no shim, link or runner is needed.
+fn package_entry(pkg: &std::path::Path) -> Option<std::path::PathBuf> {
+    let manifest = std::fs::read_to_string(pkg.join("package.json")).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&manifest).ok()?;
+    let file = match json.get("bin")? {
+        serde_json::Value::String(s) => s.clone(),
+        serde_json::Value::Object(map) => map
+            .get("dsh")
+            .and_then(|v| v.as_str())
+            .map(str::to_string)
+            .or_else(|| map.values().find_map(|v| v.as_str().map(str::to_string)))?,
+        _ => return None,
+    };
+    let path = pkg.join(file);
+    path.is_file().then_some(path)
+}
+
+/// Install `spec` into the cache dir (never `-g`, which would pollute the
+/// user's global `node_modules` / PATH). The install is local to the prefix,
+/// and the resulting package entry is picked up by [`dsh_installed`] /
+/// [`package_entry`].
+async fn install_dsh(
+    config: &Config,
+    mirror: &MirrorConfig,
+    runtime: &Runtime,
+    spec: &str,
+) -> Result<()> {
+    let dir = dsh_dir();
     let pm = pm_name(config.dsh.pm);
-    progress::log(t!("flow.prepare.installing", spec = spec, pm = pm));
+    std::fs::create_dir_all(&dir).ok();
+    progress::log(t!(
+        "flow.prepare.installing",
+        spec = spec,
+        pm = pm,
+        dir = dir.display().to_string()
+    ));
 
     let mut cmd = match config.dsh.pm {
         Pm::Npm => {
             let mut c = Command::new(platform::tool("npm"));
-            c.args(["install", "-g", &spec]);
+            c.args(["install", "--prefix"]);
+            c.arg(&dir);
+            c.args(["--no-save", spec]);
             c
         }
         Pm::Bun => {
             let mut c = Command::new(platform::tool("bun"));
-            c.args(["add", "-g", "--ignore-scripts", &spec]);
+            c.arg("add");
+            c.arg("--cwd");
+            c.arg(&dir);
+            c.arg(spec);
             c
         }
         Pm::Pnpm => {
             let mut c = Command::new(platform::tool("pnpm"));
-            c.args(["add", "-g", &spec]);
+            c.arg("add");
+            c.arg("--dir");
+            c.arg(&dir);
+            c.arg(spec);
             c
         }
     };
@@ -190,176 +308,112 @@ async fn query_latest_version(
     }
 }
 
-/// Build the command that will ultimately be spawned (managed) in Flow 5,
-/// plus an optional fallback command to retry with if the primary fails to
-/// start.
+/// Build the command that will ultimately be spawned (managed) in Flow 5.
 ///
-/// * `install` mode runs the installed `dsh` command (`dsh` / `dsh.cmd` /
-///   `dsh.sh`) directly; the runner (`npx`/`bunx`/`pnpx`) is the fallback.
-/// * `x` mode runs through the configured runner with the **bare** `dsh`
-///   name (so an installed dsh resolves without a registry round-trip); the
-///   installed `dsh` command is the fallback when the runner fails.
+/// dsh is a node script, so it is always launched as `node <entry>` from an
+/// installed copy — never through a `npx`/`bunx`/`pnpx` runner and never
+/// linked into the user's global environment.
 ///
-/// Runner commands always carry the configured npm mirror env vars, so any
-/// actual download goes through the mirror instead of hanging on a blocked
-/// default registry.
-pub async fn run(
-    config: &Config,
-    mirror: &MirrorConfig,
-    runtime: &Runtime,
-) -> Result<(Command, Option<Command>)> {
+/// The source is selected by [`Dsh::mode`]:
+/// * `global`: the user's global `dsh` is required; an error if it is missing.
+/// * `hybrid` (default): the user's global `dsh` (ambient PATH, then the
+///   runtime prefix) is used when it satisfies `version`; otherwise dsh is
+///   installed into dshl's private cache.
+/// * `private`: dsh is always installed into dshl's cache, never touching the
+///   user's global environment.
+///
+/// Whatever the source, the spawned dsh inherits a PATH that prepends the
+/// resolved toolchain (node, bun, pnpm, and the cache `.bin` when running
+/// from the cache) so dsh can run its web server and install plugins without
+/// requiring the user to have those on their global PATH.
+pub async fn run(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> Result<Command> {
     progress::step("dsh", StepStatus::Running, t!("flow.prepare.preparing"));
 
     let flags = crate::control::apply_pending_profile(split_args(&config.dsh.flags));
 
-    // Command that runs the installed `dsh` command directly.
-    let direct = || {
-        // Resolve against the runtime prefix too: a dsh installed by pnpm
-        // (`pnpm add -g`) or by the npm of a freshly installed fnm node
-        // lives in a directory that may not be on the ambient PATH.
-        let program = platform::which_in("dsh", &runtime.path_prefix())
+    // Resolve the target version: a pinned version, or the latest release
+    // (queried only when auto-update is on).
+    let target = if !config.dsh.wants_latest() {
+        config.dsh.version.clone()
+    } else if config.dsh.auto_update {
+        match query_latest_version(config, mirror, runtime).await {
+            Some(latest) => latest.to_string(),
+            None => "latest".to_string(),
+        }
+    } else {
+        "latest".to_string()
+    };
+    let spec = if target == "latest" {
+        "@deepseek-ai/dsh".to_string()
+    } else {
+        format!("@deepseek-ai/dsh@{target}")
+    };
+
+    // Choose the dsh source according to `dsh.mode` (global / hybrid / private).
+    let global = match config.dsh.mode {
+        DshMode::Private => false,
+        DshMode::Global => {
+            let dsh = probe_global(runtime).await;
+            if !dsh.found {
+                return Err(crate::error::Error(
+                    t!("flow.prepare.global_requires_dsh").to_string(),
+                ));
+            }
+            progress::log(t!("flow.prepare.installed", installed = dsh.raw.trim()));
+            true
+        }
+        DshMode::Hybrid => hybrid_use_global(config, &target, runtime).await,
+    };
+
+    let mut cmd = if global {
+        // Run the user's global `dsh` directly (dsh / dsh.cmd / dsh.sh),
+        // spawned in a hidden console so no window flashes.
+        let program = platform::which("dsh")
+            .or_else(|| platform::which_in("dsh", &runtime.path_prefix()))
             .unwrap_or_else(|| PathBuf::from(platform::with_ext("dsh")));
         let mut c = Command::new(program);
         c.args(&flags);
         c
-    };
-
-    // Command that runs dsh through the configured runner (npx/bunx/pnpx).
-    //
-    // The target is the BARE name `dsh` (optionally `dsh@<version>`), not the
-    // package spec `@deepseek-ai/dsh`: `bunx dsh` resolves the already
-    // installed command (e.g. bun's global `~/.bun/bin/dsh`) without any
-    // registry round-trip, while `bunx @deepseek-ai/dsh` forces a manifest
-    // lookup that hangs on a blocked/slow registry ("Resolving
-    // dependencies"). The npm mirror env vars make any actual download go
-    // through the configured mirror.
-    let runner = || {
-        let exe = exector_name(config.dsh.exector);
-        let mut c = Command::new(platform::tool(exe));
-        match config.dsh.exector {
-            Exector::Npx | Exector::Pnpx => {
-                c.arg("--yes");
-                if !config.dsh.auto_update {
-                    c.arg("--prefer-offline");
-                }
-            }
-            Exector::Bunx => {}
+    } else {
+        // Install into the cache (only when missing) and run
+        // `node <package-bin-entry>`.
+        if !dsh_installed() {
+            install_dsh(config, mirror, runtime, &spec).await?;
         }
-        let name = if config.dsh.wants_latest() {
-            "dsh".to_string()
-        } else {
-            format!("dsh@{}", config.dsh.version)
-        };
-        c.arg(name);
+        let entry = package_entry(&dsh_pkg_dir())
+            .unwrap_or_else(|| dsh_bin_dir().join(platform::with_ext("dsh")));
+        let node = platform::which_in("node", &runtime.path_prefix())
+            .unwrap_or_else(|| platform::tool("node"));
+        let mut c = Command::new(node);
+        c.arg(entry);
         c.args(&flags);
-        process::with_env(&mut c, &mirror.npm_env());
         c
     };
 
-    let (mut cmd, mut fallback) = match config.dsh.mode {
-        DshMode::Install => {
-            let dsh = probe::dsh_in(&runtime.path_prefix()).await;
-            if !dsh.found {
-                progress::log(t!("flow.prepare.not_installed"));
-                install_dsh(config, mirror, runtime).await?;
-            } else if config.dsh.wants_latest() {
-                // No pinned version: auto-update decides whether to refresh.
-                if config.dsh.auto_update {
-                    match query_latest_version(config, mirror, runtime).await {
-                        Some(latest) => match FullVersion::parse(&dsh.raw) {
-                            Some(installed) if installed >= latest => {
-                                progress::log(t!(
-                                    "flow.prepare.up_to_date",
-                                    installed = installed.to_string()
-                                ));
-                            }
-                            _ => {
-                                progress::log(t!(
-                                    "flow.prepare.updating",
-                                    current = dsh.raw.trim(),
-                                    latest = latest.to_string()
-                                ));
-                                install_dsh(config, mirror, runtime).await?;
-                            }
-                        },
-                        None => {
-                            progress::log(t!(
-                                "flow.prepare.version_query_failed",
-                                installed = dsh.raw.trim()
-                            ));
-                        }
-                    }
-                } else {
-                    progress::log(t!(
-                        "flow.prepare.auto_update_off",
-                        installed = dsh.raw.trim()
-                    ));
-                }
-            } else if dsh_version_ok(&dsh, &config.dsh.version) {
-                progress::log(t!("flow.prepare.installed", installed = dsh.raw.trim()));
-            } else {
-                progress::log(t!(
-                    "flow.prepare.version_mismatch",
-                    wanted = config.dsh.version,
-                    current = dsh.raw.trim()
-                ));
-                install_dsh(config, mirror, runtime).await?;
-            }
-
-            // Run the installed `dsh` command directly (dsh / dsh.cmd /
-            // dsh.sh), spawned in a hidden console so no window flashes.
-            // Fall back to the runner if the direct launch fails.
-            (direct(), Some(runner()))
-        }
-        DshMode::X => {
-            // x mode: run through bunx / npx / pnpx (bare `dsh` name, so an
-            // installed dsh is used without a registry round-trip). If the
-            // runner fails to start, retry with the installed `dsh` command
-            // when one exists.
-            let installed = probe::dsh_in(&runtime.path_prefix()).await;
-            let target = if config.dsh.wants_latest() {
-                "dsh".to_string()
-            } else {
-                format!("dsh@{}", config.dsh.version)
-            };
-            if installed.found && dsh_version_ok(&installed, &config.dsh.version) {
-                progress::log(t!(
-                    "flow.prepare.x_installed",
-                    exector = exector_name(config.dsh.exector),
-                    installed = installed.raw.trim()
-                ));
-            } else {
-                let desc = if installed.found {
-                    t!("flow.prepare.runner_resolve")
-                } else {
-                    t!("flow.prepare.runner_download")
-                };
-                progress::log(t!(
-                    "flow.prepare.x_runner",
-                    exector = exector_name(config.dsh.exector),
-                    target = target,
-                    desc = desc,
-                    spec = config.dsh.package_spec()
-                ));
-            }
-            let fallback = if installed.found {
-                Some(direct())
-            } else {
-                None
-            };
-            (runner(), fallback)
-        }
-    };
-
-    apply_path(&mut cmd, runtime);
-    if let Some(fb) = &mut fallback {
-        apply_path(fb, runtime);
+    // Inject the resolved toolchain into the dsh process's PATH so it can run
+    // its web server and install plugins: node, bun, pnpm, and (when running
+    // from the cache) the cache install's .bin. This is temporary and scoped
+    // to the dsh process — the user's own environment is untouched.
+    let mut parts: Vec<std::ffi::OsString> = Vec::new();
+    if !global {
+        parts.push(dsh_bin_dir().into_os_string());
     }
+    parts.extend(runtime.path_prefix().into_iter().map(Into::into));
+    if let Some(existing) = std::env::var_os("PATH") {
+        parts.push(existing);
+    }
+    cmd.env(
+        "PATH",
+        std::env::join_paths(parts)
+            .unwrap_or_else(|_| std::env::var_os("PATH").unwrap_or_default()),
+    );
+    process::with_env(&mut cmd, &mirror.npm_env());
+
     // Remember the resolved runtime PATH so the control `open-terminal`
     // method can spawn a terminal with the same (dsh-like) environment.
     crate::control::store_runtime_path(&runtime.augmented_path());
     progress::step("dsh", StepStatus::Done, t!("flow.prepare.ready"));
-    Ok((cmd, fallback))
+    Ok(cmd)
 }
 
 #[cfg(test)]
