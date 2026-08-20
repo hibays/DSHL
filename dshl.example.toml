@@ -55,11 +55,11 @@ mode = "webview"
 #   true            = closing hides to tray, dsh keeps running in the
 #                     background; restore from the tray icon, quit via its
 #                     menu (or Ctrl+C in a console build).
-close-to-tray = false
+close-to-tray = true
 # Only allow one dshl instance on this machine (launcher-level mutex,
 # separate from the [dsh] single-instance option which guards dsh).
 #   false (default) = every dshl process runs independently
 #   true            = a second dshl does not start; it activates the
 #                     existing instance instead (restore from tray if
 #                     hidden, or focus its window if visible)
-single-instance = false
+single-instance = true

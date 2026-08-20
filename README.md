@@ -1,4 +1,4 @@
-# DSHL — DeepSeek Harness web 启动器
+# DSHL — DeepSeek Harness 启动器
 
 <p align="center">
   <strong>简体中文</strong> | <a href="./README_en.md">English</a>
@@ -11,7 +11,7 @@
 ![_](docs/screenshot_1.webp)
 
 DSHL 是一个轻量的原生启动器，以 [webui.me](https://webui.me) 作为启动 UI 包装，
-在浏览器里启动 **DeepSeek Harness Web UI**（`dsh web`）。它会检查运行环境，必要时
+在浏览器里启动 **DeepSeek Harness WebUI**（`dsh web`）。它会检查运行环境，必要时
 安装 `@deepseek-ai/dsh`，在临时端口启动它，并把浏览器路由过去。
 
 所有行为都通过 **`dshl.toml`** 配置；启动器基于**无依赖的原生 async**
@@ -22,8 +22,8 @@ DSHL 是一个轻量的原生启动器，以 [webui.me](https://webui.me) 作为
 - **Rust 编写 · 单文件便携** — 原生编译为**一个平台可执行文件**：无安装器、
   无捆绑运行时、无 GUI 框架。拷到哪都能跑（U 盘也行），`dshl.toml` 放在可执行
   文件旁（或平台配置目录）即可随身携带配置。
-- **只需要浏览器** — 启动器自己的界面不依赖任何桌面框架：启动页由内嵌的本地
-  web 服务器（webui.me）提供，用系统浏览器或内嵌 WebView 打开；机器上唯一
+- **仅浏览器模式** — 启动器自己的界面不依赖任何桌面框架：启动页由内嵌的本地
+  web 服务器（webui.me）提供，只需用系统浏览器或内嵌 WebView 作为显示端；机器上唯一
   的硬依赖是 Node.js（而 dsh 本身就需要它）。
 - **webui.me 包装** — 轻量启动页（进度、日志、配置），dsh 启动后导航到 dsh（窗口保留，配合托盘可随时唤回）。
 - **五个明确的启动流程**：

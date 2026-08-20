@@ -1,4 +1,4 @@
-# DSHL — DeepSeek Harness web launcher
+# DSHL — DeepSeek Harness launcher
 
 <p align="center">
   <a href="./README.md">简体中文</a> | <strong>English</strong>
@@ -11,7 +11,7 @@
 ![_](docs/screenshot_1.webp)
 
 DSHL is a small, native launcher written in **Rust** that boots the
-**DeepSeek Harness web UI** (`dsh web`) inside a browser, using
+**DeepSeek Harness WebUI** (`dsh web`) inside a browser, using
 [webui.me](https://webui.me) as the startup-UI wrapper. It checks the runtime,
 installs `@deepseek-ai/dsh` if needed, boots it on an ephemeral port, and
 routes the browser to it.

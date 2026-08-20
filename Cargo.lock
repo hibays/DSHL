@@ -326,7 +326,7 @@ checksum = "d8b14ccef22fc6f5a8f4d7d768562a182c04ce9a3b3157b91390b52ddfdf1a76"
 
 [[package]]
 name = "dshl"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "ctrlc",
  "dshl-core",
@@ -335,7 +335,7 @@ dependencies = [
 
 [[package]]
 name = "dshl-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "base64 0.23.1",
  "libc",
@@ -353,7 +353,7 @@ dependencies = [
 
 [[package]]
 name = "dshl-native"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "napi",
  "napi-derive",
@@ -1881,7 +1881,7 @@ dependencies = [
 [[package]]
 name = "webui-rs"
 version = "2.5.0"
-source = "git+https://github.com/hibays/rust-webui/?branch=main#592c12f63e9333a63fc822e92f911d1f65c2303d"
+source = "git+https://github.com/hibays/rust-webui/?branch=main#e2beece03a6797d3f4b8fe4865d5d001ecbe1033"
 dependencies = [
  "lazy_static",
  "webui-sys",
@@ -1890,7 +1890,7 @@ dependencies = [
 [[package]]
 name = "webui-sys"
 version = "2.5.0"
-source = "git+https://github.com/hibays/rust-webui/?branch=main#592c12f63e9333a63fc822e92f911d1f65c2303d"
+source = "git+https://github.com/hibays/rust-webui/?branch=main#e2beece03a6797d3f4b8fe4865d5d001ecbe1033"
 dependencies = [
  "cc",
 ]
