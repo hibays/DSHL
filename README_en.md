@@ -4,6 +4,10 @@
   <a href="./README.md">简体中文</a> | <strong>English</strong>
 </p>
 
+[![Release](https://img.shields.io/github/v/release/hibays/DSHL?style=flat-square&logo=github)](https://github.com/hibays/DSHL/releases)
+[![License](https://img.shields.io/github/license/hibays/DSHL?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4176e6?style=flat-square)]()
+
 ![_](docs/screenshot_1.webp)
 
 DSHL is a small, native launcher written in **Rust** that boots the
@@ -413,6 +417,10 @@ ffmpeg -hide_banner -y -i assets/dsh-black.svg -frames:v 1 packing/macos/dsh.png
 # black + alpha mask — the system renders it in the menu-bar colour):
 ffmpeg -hide_banner -y -i assets/dsh-black.svg -pix_fmt rgba -f rawvideo -s 32x32 packing/macos/tray-black.rgba
 ```
+
+> **⚠️ Disclaimer**  
+> This tool (DSHL) is a **community third-party launcher** and is **not affiliated with, endorsed by, or recognized by DeepSeek** in any direct or indirect way.  
+> All trademarks mentioned in this project (including "DeepSeek", "DeepSeek Harness", etc.) belong to their respective legal owners.
 
 ## License
 

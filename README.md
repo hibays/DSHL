@@ -4,6 +4,10 @@
   <strong>简体中文</strong> | <a href="./README_en.md">English</a>
 </p>
 
+[![Release](https://img.shields.io/github/v/release/hibays/DSHL?style=flat-square&logo=github)](https://github.com/hibays/DSHL/releases)
+[![License](https://img.shields.io/github/license/hibays/DSHL?style=flat-square)](LICENSE)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-4176e6?style=flat-square)]()
+
 ![_](docs/screenshot_1.webp)
 
 DSHL 是一个轻量的原生启动器，以 [webui.me](https://webui.me) 作为启动 UI 包装，
@@ -349,6 +353,10 @@ ffmpeg -hide_banner -y -i assets/dsh-black.svg -frames:v 1 packing/macos/dsh.png
 # 系统自动按菜单栏深浅色渲染）
 ffmpeg -hide_banner -y -i assets/dsh-black.svg -pix_fmt rgba -f rawvideo -s 32x32 packing/macos/tray-black.rgba
 ```
+
+> **⚠️ 免责声明**
+> 本工具（DSHL）是一个**社区第三方启动器**，与 DeepSeek（深度求索）官方**无任何直接或间接的关联、授权或认可**。
+> 项目内所有提及的商标（包括“DeepSeek”、“DeepSeek Harness”等）均属于其各自的合法所有者。
 
 ## License
 
