@@ -1,6 +1,8 @@
 # DSHL — DeepSeek Harness web launcher
 
-> [简体中文](./README.md) | **English**
+<p align="center">
+  <a href="./README.md">简体中文</a> | <strong>English</strong>
+</p>
 
 ![_](docs/screenshot_1.webp)
 
