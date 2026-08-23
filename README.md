@@ -126,6 +126,11 @@ flowchart TD
 `mirrors.nodejs_release` → fnm/nvm/nub 的 Node 发行版下载；
 `mirrors.bun_download`、`mirrors.github` → 各自的下载源。
 
+**离线与弱网语义**：下载类操作（bun/nub 本体、Node 发行版）全部支持断点续传——
+中断后从已下载的字节继续（curl `-C -` + 自动重试），绝不从头重来；因此安装/下
+载类调用不设超时。与之相对，探测与校验类调用统一有界（registry 查询 3s、全局
+程序校验 15s），保证离线时启动流程快速失败而非挂住。
+
 ## 构建
 
 ```sh

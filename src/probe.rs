@@ -55,10 +55,13 @@ async fn probe_cmd_in(name: &'static str, version_args: &[&str], extra_dirs: &[P
     let mut cmd = Command::new(&path);
     cmd.args(version_args);
     match process::run_async(&mut cmd).await {
-        Ok(res) => {
-            let raw = format!("{}{}", res.stdout.trim(), res.stderr.trim());
-            Tool::found(name, path, raw)
-        }
+        Ok(res) => tool_from_result(
+            name,
+            path,
+            res.success(),
+            res.stdout.trim().to_string(),
+            res.stderr.trim().to_string(),
+        ),
         Err(_) => Tool {
             name,
             found: true,
@@ -66,6 +69,35 @@ async fn probe_cmd_in(name: &'static str, version_args: &[&str], extra_dirs: &[P
             version: None,
             raw: String::new(),
         },
+    }
+}
+
+/// Classify a `--version` probe result.
+///
+/// Exit status is authoritative: a NON-ZERO exit means the binary exists but
+/// is broken, and its output must NOT be mined for a version - a crashing
+/// node shim prints `Node.js v26.7.0` in its stack trace, which used to be
+/// extracted as the tool's own version and made a stale global dsh look
+/// up-to-date. On success, combined stdout+stderr stays lenient for tools
+/// that print their version on stderr.
+fn tool_from_result(
+    name: &'static str,
+    path: PathBuf,
+    success: bool,
+    stdout: String,
+    stderr: String,
+) -> Tool {
+    if success {
+        let raw = format!("{}{}", stdout.trim(), stderr.trim());
+        Tool::found(name, path, raw)
+    } else {
+        Tool {
+            name,
+            found: true,
+            path: Some(path),
+            version: None,
+            raw: String::new(),
+        }
     }
 }
 
@@ -148,4 +180,37 @@ pub async fn nvm() -> Tool {
     }
     // Rare: a real `nvm` binary on PATH.
     probe_cmd("nvm", &["--version"]).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn crashed_probe_never_mines_a_version() {
+        // 真实事故：坏壳的 --version 崩溃堆栈末尾带 `Node.js v26.7.0`,
+        // 全文扫版本号把 node 的版本当成了工具自己的版本。
+        let t = tool_from_result(
+            "dsh",
+            PathBuf::from("C:/nowhere/dsh.exe"),
+            false,
+            String::new(),
+            "Error: Cannot find module 'x'\nNode.js v26.7.0".to_string(),
+        );
+        assert!(t.found, "binary exists");
+        assert_eq!(t.version, None, "failed probe must not yield a version");
+        assert_eq!(t.raw, "", "crash output must not become raw");
+    }
+
+    #[test]
+    fn successful_probe_keeps_combined_output() {
+        let t = tool_from_result(
+            "nub",
+            PathBuf::from("C:/nowhere/nub.exe"),
+            true,
+            "0.7.5".to_string(),
+            String::new(),
+        );
+        assert_eq!(t.version.map(|v| v.to_string()), Some("0.7.5".into()));
+    }
 }

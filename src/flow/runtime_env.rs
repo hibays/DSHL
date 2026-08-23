@@ -14,6 +14,7 @@ use crate::config::Config;
 use crate::error::Result;
 use crate::install::{self, Runtime};
 use crate::mirror::MirrorConfig;
+use crate::platform;
 use crate::probe::{self, Tool};
 use crate::progress::{self, StepStatus};
 use crate::runtime;
@@ -97,12 +98,7 @@ pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Runtime> {
     // 1) pm=nub：确保 nub 本体存在。优先用户全局 nub，其次缓存安装
     //    （npm 镜像）；失败不致命——回退内置链并把告警写进日志。
     if config.dsh.needs_nub() {
-        let hint = node_tool
-            .as_ref()
-            .and_then(|t| t.path.as_ref())
-            .and_then(|p| p.parent())
-            .map(|p| p.to_path_buf());
-        match install::nub::ensure_nub(config, mirror, hint.as_deref()).await {
+        match install::nub::ensure_nub(config, mirror).await {
             Ok(mut dirs) => nub_dirs.append(&mut dirs),
             Err(e) => progress::log(t!("flow.runtime.nub_failed", err = e.to_string())),
         }
@@ -126,12 +122,19 @@ pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Runtime> {
 
     if node_dir.is_none() {
         // a) nub 提供层（仅 pm=nub 且镜像在位且 nub 可运行）。
+        // nub 可执行文件：优先缓存安装的 bin 目录，否则全局探测。
+        let ambient_nub = probe::nub().await;
+        let nub_exe = nub_dirs
+            .iter()
+            .map(|d| d.join(platform::with_ext("nub")))
+            .find(|p| p.is_file())
+            .or_else(|| ambient_nub.path.clone());
         if config.dsh.needs_nub()
             && mirror.enabled()
             && mirror.npm.is_some()
-            && (!nub_dirs.is_empty() || probe::nub().await.found)
+            && let Some(nub_exe) = nub_exe
             && let Some(dir) =
-                install::nub::provision_node(mirror, install::NODE_INSTALL_VERSION).await
+                install::nub::provision_node(&nub_exe, mirror, install::NODE_INSTALL_VERSION).await
         {
             progress::log(t!("flow.runtime.node_via_nub", dir = dir.display()));
             node_dir = Some(dir);

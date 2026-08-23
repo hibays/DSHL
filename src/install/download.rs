@@ -131,3 +131,103 @@ pub(crate) async fn install_fnm_binary(mirror: &MirrorConfig) -> Result<PathBuf>
     make_executable(&final_path);
     Ok(final_path)
 }
+
+// ---------------------------------------------------------------------------
+// Registry-direct downloads (npm tarballs without spawning npm) — shared by
+// the nub and bun installers.
+// ---------------------------------------------------------------------------
+
+/// Registry base URL (configured mirror wins; falls back to npmjs.org).
+pub(crate) fn registry_base(mirror: &MirrorConfig) -> String {
+    if mirror.enabled()
+        && let Some(reg) = &mirror.npm
+    {
+        return reg.trim_end_matches('/').to_string();
+    }
+    "https://registry.npmjs.org".to_string()
+}
+
+/// Resumable HTTP(S) download: `-C -` continues an existing partial file and
+/// the retry loop keeps trying up to three times. A failed resume drops the
+/// partial so the next attempt starts clean instead of failing forever.
+pub(crate) async fn http_download(url: &str, dest: &Path) -> Result<()> {
+    let mut last: Option<Error> = None;
+    for _ in 0..3 {
+        let mut cmd = platform::shell_command();
+        cmd.arg(format!(
+            "curl -fL -C - --retry 2 --retry-delay 2 -o {q}{dest}{q} {q}{url}{q}",
+            q = '"',
+            dest = dest.display(),
+            url = url
+        ));
+        match run_streaming(cmd, "download").await {
+            Ok(()) => return Ok(()),
+            Err(e) => {
+                let _ = std::fs::remove_file(dest);
+                last = Some(e);
+            }
+        }
+    }
+    Err(last.unwrap_or(Error("download failed".into())))
+}
+
+/// Plain-text GET via curl (small JSON documents like `/latest`).
+pub(crate) async fn http_get_text(url: &str) -> Result<String> {
+    let tmp = std::env::temp_dir().join(format!("dshl-get-{}", std::process::id()));
+    http_download(url, &tmp).await?;
+    let text = std::fs::read_to_string(&tmp).map_err(|e| Error(e.to_string()))?;
+    let _ = std::fs::remove_file(&tmp);
+    Ok(text)
+}
+
+/// Pull the first `"key": "value"` string out of a small flat JSON document
+/// without pulling in a JSON parser.
+pub(crate) fn extract_json_string(json: &str, key: &str) -> Option<String> {
+    let needle = format!("\"{key}\":");
+    let start = json.find(&needle)? + needle.len();
+    let rest = json[start..].trim_start().strip_prefix('"')?;
+    let end = rest.find('"')?;
+    Some(rest[..end].to_string())
+}
+
+/// Extract a .tgz into `dest_dir` using the system bsdtar/GNU tar.
+pub(crate) async fn extract_tgz(tgz: &Path, dest_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest_dir).map_err(|e| Error(e.to_string()))?;
+    let mut cmd = platform::shell_command();
+    cmd.arg(format!(
+        "tar -xzf {q}{tgz}{q} -C {q}{dest}{q}",
+        q = '"',
+        tgz = tgz.display(),
+        dest = dest_dir.display()
+    ));
+    run_streaming(cmd, "extract").await
+}
+
+/// Fetch an npm package tarball straight from the registry and extract it.
+///
+/// Returns the extracted `package/` directory (the tarball's single root).
+/// `name` may be scoped (`@scope/pkg`) - the metadata endpoint uses %2F,
+/// the tarball endpoint uses literal slashes (both are what registries serve).
+pub(crate) async fn fetch_package_extracted(
+    mirror: &MirrorConfig,
+    name: &str,
+    version: &str,
+    stage_dir: &Path,
+) -> Result<std::path::PathBuf> {
+    let base = registry_base(mirror);
+    let meta = format!("{base}/{name}/latest");
+    let _ = &meta;
+
+    let short = short_name(name);
+    let tgz_url = format!("{base}/{name}/-/{short}-{version}.tgz");
+    let tgz = stage_dir.join("pkg.tgz");
+    http_download(&tgz_url, &tgz).await?;
+    let out = stage_dir.join("extracted");
+    extract_tgz(&tgz, &out).await?;
+    let _ = std::fs::remove_file(&tgz);
+    Ok(out.join("package"))
+}
+
+fn short_name(name: &str) -> String {
+    name.rsplit('/').next().unwrap_or(name).to_string()
+}

@@ -149,6 +149,13 @@ npm/bun/pnpm/nub registries and nub's own install; mirrors.nodejs_release
 feeds fnm/nvm/nub Node dist downloads; mirrors.bun_download /
 mirrors.github cover their download sources.
 
+**Offline & weak-network semantics**: download-class operations (bun/nub
+binaries, Node dists) are resumable - after an interruption they continue
+from the bytes already fetched (`curl -C -` with retries), never restarting
+from zero; install/download calls therefore carry NO timeout. Probes and
+verifications are bounded instead (3s registry query, 15s global-program
+check) so an offline start fails fast instead of hanging.
+
 ## Build
 
 ```sh

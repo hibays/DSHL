@@ -37,6 +37,7 @@ description: Use when reviewing changes in the dsh-launcher repo — 本仓特�
 - **i18n 键使用**：用户可见消息走键而非裸英文串拼接（Error(String) 经 napi/HTTP 直达用户）。
 - **文档即契约**：行为变更同 diff 更新所属 README/backend-contract 注释；README 中的
   协议/路由/默认值描述必须能在代码中指出出处。
+- **探测器以退出码为准**：`--version` 非零退出的输出里禁止挖版本号——坏壳的崩溃堆栈末尾常带 `Node.js vXX.Y.Z`，曾被当成工具自身版本让过期全局 dsh 看起来是最新（probe.rs::tool_from_result 有回归测试）。
 - **门禁**：`scripts/gate.ps1|gate.sh`（fmt + clippy -D warnings + test --locked +
   npm check + pack dry-run）；跨平台验证可用 WSL bash 跑 Linux 侧（注意本机裸 `bash`
   可能是 WSL）。

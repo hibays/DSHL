@@ -114,6 +114,8 @@ scripts/publish.ps1|publish.sh -Version x.y.z [-DryRun]  # Track B npm 发布（
 - 环境隔离原则：dsh 装进 dshl 缓存并注入子进程 PATH，绝不全局安装；镜像只经 env / CLI 参数临时注入（npm/cargo/nodejs-release/bun-download/github 五路，见 `dshl.example.toml`）。
 - CI 矩阵：Rust 在 ubuntu-latest + windows-11-arm（aarch64-pc-windows-msvc，抓 ARM64 回归）双跑；Linux 需 gtk-3 / webkit2gtk-4.1 / ayatana-appindicator 系统包；JS job 单独跑语法检查与 pack 校验。
 
+- **网络策略**：安装/下载类子进程不设超时（正确性靠 curl 断点续传 + 工具自身重试）；探测/校验类子进程必须有界（probe 30s、registry 查询 3s、全局校验 15s）。
+
 ## Testing & QA
 
 - **形态**：全部为源码文件尾内联 `#[test]`（无独立 `tests/` 目录、无 `#[tokio::test]`）；异步断言统一 `crate::runtime::block_on(async { ... })`。
