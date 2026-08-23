@@ -94,30 +94,37 @@ DSHL 是一个轻量的原生启动器（Rust），以 [webui.me](https://webui.
 
 ## 运行时装配链
 
-启动流水线第 2 步会先并发探测 node / bun / pnpm / nub / fnm / cargo / nvm 并把
-各自的版本与路径写进日志——这一步只是透明汇报；真正的装配发生在探测结果之上，
-且始终遵守同一条第一原则：**系统里已有的可用工具原样使用，绝不重装**。
+启动流水线第 2 步先并发探测全部工具并写日志（透明汇报），随后按下图装配。
+第一原则：**系统里已有的可用工具原样使用，绝不重装**。
 
-node 是唯一硬前提（最低 24.15.0）。探测到已安装且满足最低版本时，其目录直接作
-为运行时目录，流水线其余部分照常进行；只有缺失或过旧时才进入装配流程。此时选
-择哪条路径由两个条件共同决定：配置里的包管理器是否为 nub，以及是否启用了镜像。
+```mermaid
+flowchart TD
+    P[并发探测 node/bun/pnpm/nub/fnm/cargo/nvm] --> Q{node >= 24.15.0 ?}
+    Q -- "是：零安装，直接使用" --> DONE[运行时就绪]
+    Q -- "缺失或过旧" --> M{pm = "nub" 且<br>mirrors.npm 已配置 ?}
 
-启用镜像且包管理器为 nub 时，装配从 npm 镜像开始：把 @nubjs/nub 安装进 dshl 自
-己的缓存目录（与 pnpm 同一套机制，registry 由 mirrors.npm 注入，因此天然可镜
-像），随后交由 nub 提供 node——`nub node install` 按 NODEJS_ORG_MIRROR（同样来
-自 mirrors.nodejs_release）拉取发行版并放入其托管目录，`nub node which` 解析出
-二进制路径，该目录随即成为本次运行的运行时目录。链条上任何一环失败都会立即回
-退到下一段：fnm（无镜像环境下的首选版本管理器）→ `cargo install fnm` → nvm →
-自动安装 fnm 到 `~/.cache/bin`，全部失败时界面给出 fnm 安装指南链接。
+    M -- "是" --> N1["npm 镜像安装 @nubjs/nub<br>→ <cache>/dshl/nub"]
+    N1 --> N2{安装成功?}
+    N2 -- "否" --> H
+    N2 -- "是" --> N3["nub node install 26<br>（NODEJS_ORG_MIRROR）"]
+    N3 --> N4{"nub node which<br>解析到二进制?"}
+    N4 -- "是" --> NDONE[node 目录 = nub 提供 ✓]
+    N4 -- "否" --> H
 
-包管理器的装配遵循同样的"已有则用、缺失则装进缓存"模式：bun 缺失时经 GitHub
-镜像下载本体、官方脚本兜底、npm 再兜底；pnpm 与 nub 缺失时都以
-`npm install --prefix <cache>/dshl/<名字>` 落入各自缓存目录并把
-`node_modules/.bin` 注入 PATH。镜像层横切以上所有网络步骤——mirrors.npm 同时喂
-给 npm/bun/pnpm/nub 的 registry 与安装过程，mirrors.nodejs_release 喂给
-fnm/nvm/nub 的 Node 发行版下载——且只以临时环境变量或旗标注入，从不写入任何全
-局配置文件。
+    M -- "否（未启用镜像）" --> H["fnm → cargo install fnm → nvm<br>→ 自动装 fnm → 手动指引链接"]
+    H --> DONE
 
+    DONE --> PM
+    subgraph PM["包管理器（把 @deepseek-ai/dsh 装进缓存）"]
+        direction LR
+        PN1["pm=nub：nub add（镜像）"] ~~~ PN2["pm=bun：GitHub 镜像下载本体"] ~~~ PN3["pm=pnpm/npm：各自直装"]
+    end
+```
+
+镜像层横切以上所有网络步骤且**只临时注入环境变量/旗标**，从不写全局配置：
+`mirrors.npm` → npm/bun/pnpm/nub 的 registry 与 nub 本体安装；
+`mirrors.nodejs_release` → fnm/nvm/nub 的 Node 发行版下载；
+`mirrors.bun_download`、`mirrors.github` → 各自的下载源。
 
 ## 构建
 
