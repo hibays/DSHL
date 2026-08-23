@@ -154,7 +154,7 @@ jobs:
         with:
           name: dshl-${{ matrix.artifact }}
           path: |
-            dshl-${{ matrix.artifact }}.zip
+            dshl-*.zip
             dshl-*-setup.exe
             dshl-*.dmg
             dshl_*.deb
@@ -180,6 +180,7 @@ jobs:
         id: changelog
         shell: bash
         run: |
+          VERSION="${GITHUB_REF_NAME#v}"
           PREV_TAG="$(git describe --tags --abbrev=0 HEAD^ 2>/dev/null || echo '')"
           if [ -n "$PREV_TAG" ]; then
             RANGE="${PREV_TAG}..HEAD"
@@ -194,7 +195,7 @@ jobs:
           } > CHANGELOG.md
           # Beginner-friendly quick-pick table: who/what device -> which file,
           # with direct download links. Prepended above the commit list.
-          DL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/${{ github.ref_name }}"
+          DL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/v${VERSION}"
           {
             echo "downloads<<TABLE"
             echo "## 快速下载 / Quick download"
@@ -203,12 +204,12 @@ jobs:
             echo ""
             echo "| 你的系统 / Your system | 下载 / Download |"
             echo "|---|---|"
-            echo "| Windows 10/11 · 64 位（大多数电脑）| [安装版 setup.exe]($DL/dshl-$VERSION-windows-x86_64-setup.exe) · [便携版 zip]($DL/dshl-$VERSION-windows-x86_64.zip) |"
-            echo "| Windows on ARM（Surface Pro X 等）| [安装版 setup.exe]($DL/dshl-$VERSION-windows-aarch64-setup.exe) · [便携版 zip]($DL/dshl-$VERSION-windows-aarch64.zip) |"
-            echo "| macOS Apple Silicon（M1/M2/M3/M4）| [dshl-$VERSION-macos-aarch64.dmg]($DL/dshl-$VERSION-macos-aarch64.dmg) |"
-            echo "| macOS Intel 芯片 | [dshl-$VERSION-macos-x86_64.dmg]($DL/dshl-$VERSION-macos-x86_64.dmg) |"
-            echo "| Linux x64 · Ubuntu/Debian 系 | [安装包 .deb]($DL/dshl_${VERSION}_amd64.deb) · [便携版 zip]($DL/dshl-$VERSION-linux-x86_64.zip) |"
-            echo "| Linux ARM64 · Ubuntu/Debian 系 | [安装包 .deb]($DL/dshl_${VERSION}_arm64.deb) · [便携版 zip]($DL/dshl-$VERSION-linux-aarch64.zip) |"
+            echo "| Windows 10/11 · 64 位（大多数电脑）| [安装版 setup.exe]($DL/dshl-v${VERSION}-windows-x86_64-setup.exe) · [便携版 zip]($DL/dshl-v${VERSION}-windows-x86_64.zip) |"
+            echo "| Windows on ARM（Surface Pro X 等）| [安装版 setup.exe]($DL/dshl-v${VERSION}-windows-aarch64-setup.exe) · [便携版 zip]($DL/dshl-v${VERSION}-windows-aarch64.zip) |"
+            echo "| macOS Apple Silicon（M1/M2/M3/M4）| [dshl-$VERSION-macos-aarch64.dmg]($DL/dshl-v${VERSION}-macos-aarch64.dmg) |"
+            echo "| macOS Intel 芯片 | [dshl-$VERSION-macos-x86_64.dmg]($DL/dshl-v${VERSION}-macos-x86_64.dmg) |"
+            echo "| Linux x64 · Ubuntu/Debian 系 | [安装包 .deb]($DL/dshl_${VERSION}_amd64.deb) · [便携版 zip]($DL/dshl-v${VERSION}-linux-x86_64.zip) |"
+            echo "| Linux ARM64 · Ubuntu/Debian 系 | [安装包 .deb]($DL/dshl_${VERSION}_arm64.deb) · [便携版 zip]($DL/dshl-v${VERSION}-linux-aarch64.zip) |"
             echo "TABLE"
           } >> "$GITHUB_OUTPUT"
 
