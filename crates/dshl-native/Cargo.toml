@@ -14,6 +14,9 @@ categories.workspace = true
 crate-type = ["cdylib"]
 name = "dshl_native"
 
+[build-dependencies]
+napi-build = "2"
+
 [dependencies]
 napi = { version = "3", default-features = false, features = ["napi8"] }
 napi-derive = "3"

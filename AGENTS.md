@@ -118,7 +118,7 @@ scripts/publish.ps1|publish.sh -Version x.y.z [-DryRun]  # Track B npm 发布（
 
 - **形态**：全部为源码文件尾内联 `#[test]`（无独立 `tests/` 目录、无 `#[tokio::test]`）；异步断言统一 `crate::runtime::block_on(async { ... })`。
 - **分布**：`control.rs`（方法分发、hello token 校验、profile flags 注入、线上 roundtrip）、`version.rs`（解析/排序/预发布）、`flow/launch.rs`（`stream_until_url` 时序与崩溃路径、`supervise` 零退出清理）、`flow/prepare.rs`（`split_args` 引号处理、版本决策）、`install/bun.rs`（镜像 URL 决策）、`install/stream.rs`、`process/child.rs`（管道 drain、孙进程占住写端）、`platform/process.rs`、`pty/mod.rs`（token 生成、URL query 解析）、`pty/server.rs`（WS 帧分类：text 永非控制帧、binary JSON 为控制、其余为 shell 输入）、`ui/geometry.rs`（persist/load roundtrip、退化尺寸拒绝、webui 硬限 clamp）。
-- **时序红线**：`install/stream.rs::verbose_output_drain_completes_promptly` 是 AsyncChild `next_line` lost-wakeup 竞态回归测试，powershell 输出约 2.2s（150 × `Start-Sleep -Milliseconds 10`；本机 Start-Sleep 每拍约 16ms）——**不要加迭代次数或睡眠时长**，会破 5s 断言。`flow/launch.rs` 多个 8s 上限断言同理勿放宽。
+- **时序测试预算**：`install/stream.rs::verbose_output_drain_completes_promptly` 是 AsyncChild `next_line` lost-wakeup 竞态回归测试，5s 预算以「无逐行延迟的生产者」为前提——powershell 分支已去掉 Start-Sleep（windows-11-arm 上每拍 ~35ms 会爆预算）。**不要重新引入逐行 sleep 或大幅加行数**；`flow/launch.rs` 多个 8s 上限断言同理勿放宽。
 - **编写约束**：临时目录一律 `std::env::temp_dir()`，不写死平台路径；不引入依赖网络 / 真实 bun / 硬编码沙箱路径的测试（历史教训：bun add 回归测试因 Windows junction 复制 `PermissionDenied` 改成通用命令）。子进程类测试 Windows 用 `%COMSPEC%`/cmd，非 Windows 用 `sh`；`flow/launch.rs` 测试统一经 `src/testutil.rs::shell()` 取平台命令。
 - **JS 侧无测试框架**：验证链就是 `npm run check` + `npm pack --workspaces --dry-run`。
 - 沙箱 stderr 里的中文经部分工具读取会显示 GBK 乱码——纯显示问题，不影响判断。

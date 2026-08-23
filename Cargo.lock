@@ -445,6 +445,7 @@ dependencies = [
  "dshl-cli",
  "dshl-core",
  "napi",
+ "napi-build",
  "napi-derive",
 ]
 

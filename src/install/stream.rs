@@ -48,7 +48,10 @@ mod tests {
             cmd.args([
                 "-NoProfile",
                 "-Command",
-                "1..150 | ForEach-Object { Write-Output ('line ' + $_); Start-Sleep -Milliseconds 10 }",
+                // No per-line sleep: on the windows-11-arm runner each
+                // Start-Sleep tick costs ~35ms and blew the 5s drain budget.
+                // Rapid-fire still exercises one notify wakeup per line.
+                "1..150 | ForEach-Object { Write-Output ('line ' + $_) }",
             ]);
             cmd
         }
