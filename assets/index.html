@@ -20,14 +20,6 @@
       and key values; status green/amber/red; checkbox checklist (double-layer
       square: empty / lit core / filled check / red cross); flat, no shadows,
       square corners.
-    ART LAYER (user-approved exception, see DESIGN.md): a GPU particle
-      fluid cloud (raw WebGL2, zero deps — ~124k particles advected through
-      a 3-scale simplex flow via ping-pong FBO, ONE gl.POINTS draw call,
-      soft additive sprites) lives BEHIND the console, colour-ramped by
-      density in the ultramarine family (no green); the pointer repels the
-      cloud and parallaxes the camera. Plus a tech-gradient DSHL wordmark
-      (ice-white→ultramarine, soft halo) cropped into the lower-right.
-      Falls back to a static CSS fog without WebGL2. Console stays pinned.
     STORY: the visitor lands mid-launch, reads a numbered stamp of install
       progress and the live terminal, and acts on quiet buttons.
     FIRST VIEWPORT: brand row top-left (logo + DSHL wordmark + tracked
@@ -40,15 +32,6 @@
     FINISH: unreviewed and undocumented is unfinished; this build ends with the
     finish review, the verdict, and DESIGN.md.
     -->
-    <!-- Background art layer (DESIGN.md "Background Art Layer"): decorative
-         particle field + giant DSHL wordmark, always behind the console and
-         pointer-transparent. Every piece of it is optional — if bgfx.js
-         fails, the CSS stratum (the wordmark) still renders. -->
-    <div class="bgfx" id="bgfx" aria-hidden="true">
-      <canvas id="bgfx-canvas"></canvas>
-      <div class="bgfx-mark">DSHL</div>
-    </div>
-
     <div class="shell">
       <header>
         <div class="brand">
@@ -108,8 +91,5 @@
     <script src="webui.js"></script>
     <script src="/i18n.js"></script>
     <script src="/app.js"></script>
-    <!-- Decoration wires up last: the art layer must never delay or break
-         the console's own bootstrapping above. -->
-    <script src="/bgfx.js"></script>
   </body>
 </html>

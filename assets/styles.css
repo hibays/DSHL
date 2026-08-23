@@ -56,13 +56,6 @@
   --err: #c6352e;
   --fill-ink: #ffffff; /* check/cross ink on signal fills (dark ink in dark mode) */
 
-  /* Art-layer tuning (light ground): the GPU cloud runs the theme's own
-     blue ramp; the wordmark shades navy→ultramarine with a soft
-     ultramarine halo — the tech voice, in theme colours. */
-  --bgfx-mark-face: none;
-  --bgfx-mark-color: #d7dbde;
-  --bgfx-mark-opacity: 0.85;
-
   --mono: "JetBrains Mono", "Cascadia Code", Consolas, monospace;
   --sans: "Inter", "Segoe UI", system-ui, -apple-system, "Microsoft YaHei", sans-serif;
 
@@ -92,13 +85,6 @@
     --warn: #e2a03a;
     --err: #f06a6a;
     --fill-ink: #0f0f11; /* signal fills are bright here — ink them dark */
-
-    /* Art-layer tuning (dark ground): the additive cloud glows in the
-       ultramarine family; the wordmark shades ice-white→ultramarine with a
-       deep blue halo — tech, not neon. */
-    --bgfx-mark-face: none;
-    --bgfx-mark-color: #f2f4f5;
-    --bgfx-mark-opacity: 0.92;
   }
 }
 
@@ -130,81 +116,12 @@ html, body {
 }
 
 .shell {
-  position: relative; /* the console sits above the background art layer */
-  z-index: 1;
   max-width: 980px;
   margin: 0 auto;
   /* Bottom room = the fixed action bar's real height (measured by app.js and
      exposed as --footer-h) plus a small gap — never a fixed placeholder, so
-     landscape screens don't grow a page scrollbar. */
+     landscape screens don't grow an unnecessary page scrollbar. */
   padding: 28px 28px calc(var(--footer-h, 96px) + 24px);
-}
-
-/* ── Background art layer ───────────────────────────────────────────── */
-
-/* The one authored exception to the flat Swiss ground (user-approved; see
- * DESIGN.md "Background Art Layer"): a field of clustered square particles
- * lives BEHIND the console. /bgfx.js paints everything that moves; CSS
- * holds only the giant tilted DSHL wordmark. The layer never takes input
- * and sits below .shell and the footer. */
-.bgfx {
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.bgfx canvas {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  display: block;
-}
-
-/* Giant DSHL wordmark — the tech plate, cropped into the lower-right edge
- * (user-confirmed placement): upright bold grotesque tipped backward as
- * one plate (perspective rotateX hinged at the baseline corner, top
- * receding). Solid gradient face — ice-white→ultramarine on dark,
- * navy→ultramarine on light — with a soft ultramarine halo: 科技风 inside
- * the theme's own colours, no foreign hue, no stroke. The pointer
- * parallax (--pmx/--pmy, set by bgfx.js) adds the last few px of depth. */
-.bgfx-mark {
-  position: absolute;
-  left: 0.02em;
-  bottom: -0.04em;
-  font-family: var(--sans);
-  font-weight: 700;
-  font-size: clamp(110px, 15vw, 240px);
-  line-height: 0.8;
-  letter-spacing: 0.02em;
-  text-transform: uppercase;
-  color: var(--bgfx-mark-color, #d7dbde);
-  opacity: var(--bgfx-mark-opacity, 0.85);
-  transform: translate(calc(var(--pmx, 0) * 8px), calc(var(--pmy, 0) * 5px));
-  animation: mark-float 11s ease-in-out infinite alternate;
-  will-change: transform;
-}
-
-/* A slow drift through the same transform chain. Keyframes replace the
- * transform rather than merging with the base rule, so the whole chain —
- * parallax vars included — is re-declared on both ends. */
-@keyframes mark-float {
-  from {
-    transform: translate(calc(var(--pmx, 0) * 14px), calc(var(--pmy, 0) * 9px))
-      perspective(1300px) rotateX(32deg);
-  }
-  to {
-    transform: translate(calc(var(--pmx, 0) * 14px), calc(var(--pmy, 0) * 9px + 12px))
-      perspective(1300px) rotateX(36deg);
-  }
-}
-
-/* Reduced motion: the drift stops (the base transform still positions the
-   mark); bgfx.js likewise swaps its loop for one static frame. */
-@media (prefers-reduced-motion: reduce) {
-  .bgfx-mark { animation: none; }
 }
 
 /* ── Header ─────────────────────────────────────────────────────────── */
@@ -606,10 +523,4 @@ button.danger:hover {
   header { flex-direction: column; align-items: flex-start; gap: 16px; }
   footer { flex-wrap: wrap; justify-content: flex-start; padding: 14px 20px; }
   .kv { grid-template-columns: minmax(0, 8em) minmax(0, 1fr); }
-  /* Stacked columns put far more text over the layer — shrink and dim the
-     wordmark so the checklist keeps the ground. */
-  .bgfx-mark {
-    font-size: clamp(120px, 34vw, 260px);
-    opacity: calc(var(--bgfx-mark-opacity, 0.4) * 0.7);
-  }
 }
