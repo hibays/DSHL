@@ -15,7 +15,6 @@
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::time::Duration;
 
 use crate::config::Config;
 use crate::error::Result;
@@ -104,7 +103,7 @@ pub async fn ensure_nub(
 /// `None` when nub is absent or provisioning fails so the caller can fall
 /// back to the fnm/cargo/nvm chain.
 pub async fn provision_node(mirror: &MirrorConfig, version: &str) -> Option<PathBuf> {
-    if probe::nub().await.found == false {
+    if !probe::nub().await.found {
         return None;
     }
     let rt = Runtime {
