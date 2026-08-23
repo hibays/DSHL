@@ -31,6 +31,11 @@ use super::download::{fetch_package_extracted, http_get_text, registry_base};
 const NUB_VERSION_MARKER: &str = "nub.version";
 const NUB_PKG: &str = "@nubjs/nub";
 
+/// Session-level negative cache: once an install attempt fails (no npm,
+/// unreachable registry, ...) do NOT retry it on every startup - retrying a
+/// doomed install added seconds of perceived launch delay to every boot.
+/// Cleared implicitly when a later attempt succeeds (writes the marker).
+static INSTALL_FAILED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
 /// Platform subpackage for @nubjs/nub (matches its optionalDependencies).
 fn platform_package() -> &'static str {
     match platform::os() {
@@ -70,15 +75,24 @@ pub async fn ensure_nub(config: &Config, mirror: &MirrorConfig) -> Result<Vec<Pa
     if !config.dsh.needs_nub() {
         return Ok(Vec::new());
     }
+    // Fast paths first (zero process spawns):
+    //   1. previous session-level failure -> skip silently;
+    //   2. cached install with marker     -> use as-is.
+    let root = crate::platform::cache_dir().join("dshl").join("nub");
+    let bin_dir = root.join("bin");
+    let exe = bin_dir.join(platform::with_ext("nub"));
+    if std::sync::atomic::AtomicBool::load(&INSTALL_FAILED, std::sync::atomic::Ordering::Relaxed) {
+        return Ok(Vec::new());
+    }
+    if exe.is_file() && marker_version(&root).is_some() {
+        progress::log(t!("install.nub.cached", dir = root.display().to_string()));
+        return Ok(vec![bin_dir]);
+    }
 
     // User's own global nub wins over our cache copy.
     if probe::nub().await.found {
         return Ok(Vec::new());
     }
-
-    let root = crate::platform::cache_dir().join("dshl").join("nub");
-    let bin_dir = root.join("bin");
-    let exe = bin_dir.join(platform::with_ext("nub"));
 
     if exe.is_file() && marker_version(&root).is_some() {
         progress::log(t!("install.nub.cached", dir = root.display().to_string()));
@@ -87,39 +101,56 @@ pub async fn ensure_nub(config: &Config, mirror: &MirrorConfig) -> Result<Vec<Pa
 
     progress::log(t!("install.nub.not_found"));
 
-    let base = registry_base(mirror);
-    let latest_json = http_get_text(&format!("{base}/{}%2Fnub/latest", "nubjs")).await?;
-    let version = super::download::extract_json_string(&latest_json, "version")
-        .ok_or_else(|| Error("registry latest response has no version".into()))?;
+    let install_result = async {
+        let base = registry_base(mirror);
+        let latest_json = http_get_text(&format!("{base}/{}%2Fnub/latest", "nubjs")).await?;
+        let version = super::download::extract_json_string(&latest_json, "version")
+            .ok_or_else(|| Error("registry latest response has no version".into()))?;
 
-    let stage = root.join(".stage");
-    let _ = std::fs::remove_dir_all(&stage);
+        let stage = root.join(".stage");
+        let _ = std::fs::remove_dir_all(&stage);
 
-    // Main package: JS launchers + metadata (kept for future flexibility).
-    let main_pkg = fetch_package_extracted(mirror, NUB_PKG, &version, &stage).await?;
+        // Main package: JS launchers + metadata (kept for future flexibility).
+        let main_pkg = fetch_package_extracted(mirror, NUB_PKG, &version, &stage).await?;
 
-    // Platform package: self-contained binaries.
-    let plat_pkg = platform_package();
-    let plat_dir = fetch_package_extracted(mirror, plat_pkg, &version, &stage).await?;
+        // Platform package: self-contained binaries.
+        let plat_pkg = platform_package();
+        let plat_dir = fetch_package_extracted(mirror, plat_pkg, &version, &stage).await?;
 
-    // Assemble bin/: platform binaries first (authoritative), then the main
-    // package's launcher scripts for anything the exe does not cover.
-    let src_bin = locate_dir(&plat_dir, "bin")
-        .ok_or_else(|| Error("platform package has no bin dir".into()))?;
-    std::fs::create_dir_all(&bin_dir).map_err(|e| Error(e.to_string()))?;
-    copy_dir_contents(&src_bin, &bin_dir)?;
-    if let Some(js_bin) = locate_dir(&main_pkg, "bin") {
-        copy_dir_contents(&js_bin, &bin_dir)?;
+        // Assemble bin/: platform binaries first (authoritative), then the main
+        // package's launcher scripts for anything the exe does not cover.
+        let src_bin = locate_dir(&plat_dir, "bin")
+            .ok_or_else(|| Error("platform package has no bin dir".into()))?;
+        std::fs::create_dir_all(&bin_dir).map_err(|e| Error(e.to_string()))?;
+        copy_dir_contents(&src_bin, &bin_dir)?;
+        if let Some(js_bin) = locate_dir(&main_pkg, "bin") {
+            copy_dir_contents(&js_bin, &bin_dir)?;
+        }
+
+        std::fs::write(root.join(NUB_VERSION_MARKER), &version)
+            .map_err(|e| Error(e.to_string()))?;
+        let _ = std::fs::remove_dir_all(&stage);
+
+        Ok(bin_dir)
     }
+    .await;
 
-    std::fs::write(root.join(NUB_VERSION_MARKER), &version).map_err(|e| Error(e.to_string()))?;
-    let _ = std::fs::remove_dir_all(&stage);
-
-    progress::log(t!(
-        "install.nub.cached",
-        dir = bin_dir.display().to_string()
-    ));
-    Ok(vec![bin_dir])
+    // Session-level negative cache: a failed install (no npm, unreachable
+    // registry) must not be retried on every startup - that retry loop was
+    // adding seconds of perceived launch delay to each boot.
+    match install_result {
+        Ok(bin_dir) => {
+            progress::log(t!(
+                "install.nub.cached",
+                dir = bin_dir.display().to_string()
+            ));
+            Ok(vec![bin_dir])
+        }
+        Err(e) => {
+            INSTALL_FAILED.store(true, std::sync::atomic::Ordering::Relaxed);
+            Err(e)
+        }
+    }
 }
 
 fn marker_version(root: &Path) -> Option<String> {

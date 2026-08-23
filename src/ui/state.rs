@@ -56,6 +56,14 @@ pub(crate) static RESTORING: AtomicBool = AtomicBool::new(false);
 /// tray so its webui server can shut down; replaced on each window
 /// re-creation.
 pub(crate) static KEEPALIVE: Mutex<Option<crate::wskeep::KeepAlive>> = Mutex::new(None);
+/// Browser-pid capture retry bookkeeping. Lives in shared state so a tray
+/// restore can RESET the budget: each close->restore cycle is a fresh chance
+/// to locate the browser process, otherwise the second and later cycles lose
+/// pid-based close detection entirely (restore appears to work once, then
+/// every later cycle goes dead).
+pub(crate) static BROWSER_CAPTURE_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
+pub(crate) static BROWSER_CAPTURE_GIVEN_UP: AtomicBool = AtomicBool::new(false);
+
 /// webui window id whose resources the supervisor should free (0 = none).
 /// Set when a window closes to the tray so its (large) struct + server + port
 /// are freed promptly at close time instead of being held while trayed and

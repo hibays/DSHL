@@ -60,8 +60,9 @@ pub fn run_loop() {
     // the existing shutdown logic. This only controls whether
     // capture_browser_pid() keeps being called.
     const BROWSER_CAPTURE_ATTEMPTS_LIMIT: u32 = 8;
-    let mut browser_capture_attempts = 0u32;
-    let mut browser_capture_given_up = false;
+    // Retry budget lives in state so restore_from_tray can reset it per
+    // tray cycle (see BROWSER_CAPTURE_* docs in state.rs).
+
     // Browser-mode close-detection latch. Lives in `state::BROWSER_WAS_SHOWN`
     // (not a local) so it can be cleared when the window goes to the tray or
     // is re-created: a stale "was shown" from the previous window must never
@@ -124,13 +125,22 @@ pub fn run_loop() {
             }
         }
 
-        // Tray "open dsh url": open the dsh deploy page in the system default
-        // browser (e.g. while the window is hidden to the tray).
+        // Tray "open dsh": bring dsh up in the EXISTING launcher window -
+        // navigate the live one (WebView or the external browser we spawned),
+        // or rebuild it from the tray. NEVER spawn a second default-browser
+        // window via the OS shell: in browser mode THIS window is dsh, and a
+        // second instance defeats the point of the mode.
         if tray::open_url_requested()
             && let Some(url) = progress::snapshot().url
         {
-            crate::debug::emit(&format!("tray: opening dsh url in system browser ({url})"));
-            let _ = crate::platform::open_url(&url);
+            match state::WINDOW_ID.load(Ordering::SeqCst) {
+                0 => {
+                    // No live window (closed to tray / mid-rebuild): rebuild
+                    // it - restore_from_tray navigates back to the dsh URL.
+                    window::restore_from_tray(false);
+                }
+                _id => window::navigate_when_connected(&url),
+            }
         }
 
         // Startup phase: if the window is gone before dsh was handed off,
@@ -185,17 +195,19 @@ pub fn run_loop() {
                 // re-locating its pid (throttled) up to the retry cap so
                 // pid-based detection can take over if it ever lands and so
                 // `stop_browser()` can reap it on shutdown.
-                if !browser_capture_given_up
+                if !state::BROWSER_CAPTURE_GIVEN_UP.load(Ordering::SeqCst)
                     && last_browser_capture.elapsed() >= std::time::Duration::from_secs(2)
                 {
-                    browser_capture_attempts += 1;
-                    if browser_capture_attempts >= BROWSER_CAPTURE_ATTEMPTS_LIMIT {
+                    state::BROWSER_CAPTURE_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
+                    if state::BROWSER_CAPTURE_ATTEMPTS.load(Ordering::SeqCst)
+                        >= BROWSER_CAPTURE_ATTEMPTS_LIMIT
+                    {
                         // Retry cap reached: stop re-locating the browser. The
                         // is_shown detection above still catches a real close;
                         // this only ends the pid re-location so the loop no
                         // longer spins on this capture path.
                         crate::debug::emit("run_loop: giving up browser pid capture");
-                        browser_capture_given_up = true;
+                        state::BROWSER_CAPTURE_GIVEN_UP.store(true, Ordering::SeqCst);
                     } else {
                         crate::debug::emit(
                             "run_loop: startup browser pid unknown; retrying capture",
@@ -256,13 +268,15 @@ pub fn run_loop() {
                     // re-locating its pid (throttled) up to the shared retry
                     // cap, so pid-based detection takes over if it lands and so
                     // `stop_browser()` can reap the browser on shutdown.
-                    if !browser_capture_given_up
+                    if !state::BROWSER_CAPTURE_GIVEN_UP.load(Ordering::SeqCst)
                         && last_browser_capture.elapsed() >= std::time::Duration::from_secs(2)
                     {
-                        browser_capture_attempts += 1;
-                        if browser_capture_attempts >= BROWSER_CAPTURE_ATTEMPTS_LIMIT {
+                        state::BROWSER_CAPTURE_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
+                        if state::BROWSER_CAPTURE_ATTEMPTS.load(Ordering::SeqCst)
+                            >= BROWSER_CAPTURE_ATTEMPTS_LIMIT
+                        {
                             crate::debug::emit("run_loop: giving up browser pid capture");
-                            browser_capture_given_up = true;
+                            state::BROWSER_CAPTURE_GIVEN_UP.store(true, Ordering::SeqCst);
                         } else {
                             crate::debug::emit("run_loop: browser pid unknown; retrying capture");
                             window::capture_browser_pid();

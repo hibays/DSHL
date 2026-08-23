@@ -613,6 +613,10 @@ pub fn restore_from_tray(show_launcher: bool) {
         // yet in its first loop ticks — would instantly read as "browser
         // closed" and bounce straight back into the tray / shutdown.
         state::BROWSER_WAS_SHOWN.store(false, Ordering::SeqCst);
+        // Fresh window: give the browser-pid capture a fresh retry budget too
+        // (each tray cycle is a new chance to locate the browser).
+        state::BROWSER_CAPTURE_ATTEMPTS.store(0, Ordering::SeqCst);
+        state::BROWSER_CAPTURE_GIVEN_UP.store(false, Ordering::SeqCst);
     }
     // `show_window` creates the window, applies geometry, shows with fallback,
     // navigates back, holds the WebView keep-alive and re-captures the browser
