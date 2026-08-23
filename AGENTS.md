@@ -43,7 +43,7 @@ DSHL（DeepSeek Harness Launcher）——一个 webui.me 包装启动器：检�
 | `src/` | dshl-core 内核（见 Architecture） |
 | `src/platform/` | OS 原语：detect / paths / process / dpi / theme / window / single_instance / actions |
 | `src/tray/` | 托盘图标，每 OS 一个实现（windows / macos / linux），统一 7 函数契约（start / hide_to_tray / quit_requested / restore_requested / open_url_requested / set_icon / shutdown）+ `is_started` 查询 |
-| `src/install/` | node/bun/pnpm 安装管线（fnm 兜底链在 `node.rs` / `download.rs` 内）+ download + stream 输出泵 |
+| `src/install/` | node/bun/pnpm/**nub** 安装管线（fnm 兜底链在 `node.rs` / `download.rs` 内；镜像感知分支在 `flow/runtime_env.rs`）+ download + stream 输出泵 |
 | `src/ui/geometry.rs` | 窗口几何持久化（WebView 与外置浏览器共用一份 `window-state.json`，物理像素 + webui 硬限 clamp） |
 | `src/testutil.rs` | 测试专用助手：按 OS 选 shell 的 `shell()`（Windows `%COMSPEC%`/cmd，Unix `sh`），供子进程类测试共用 |
 | `src/version.rs`, `src/probe.rs`, `src/mirror.rs` | 版本解析与预发布比较、工具探测（`Tool`）、镜像决策 |

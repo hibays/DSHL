@@ -24,8 +24,9 @@ github = ""
 # Flags forwarded to dsh (boot the web profile on an ephemeral port).
 flags = "--profile web --host 127.0.0.1 --port 0"
 # Package manager used to install @deepseek-ai/dsh into dshl's cache:
-# npm / bun / pnpm. (bun/pnpm are auto-installed when chosen as the pm.)
-pm = "bun"
+# nub / npm / bun / pnpm. (nub installs @nubjs/nub from npm - mirrorable;
+#   bun/pnpm are auto-installed when chosen as the pm.)
+pm = "nub"
 # Version suffix for @deepseek-ai/dsh. "latest" (default) = no suffix (and,
 # with auto-update on, a registry check on every start). A pinned version
 # like "0.1.0-rc.7" skips the network entirely.

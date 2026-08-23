@@ -104,11 +104,46 @@ managed background thread so the Node event loop stays alive.
 
 | Tool  | Version      | Required?                              |
 |-------|--------------|----------------------------------------|
-| Node  | `>= 24.15.0` | **always** (installs `26` via fnm if missing) |
+| Node  | `>= 24.15.0` | **always** (installed via the assembly chain below when missing) |
+| Nub   | npm latest   | default (`pm = "nub"`); fetched through the npm mirror into dshl's cache |
 | Bun   | `>= 1.3.14`  | only when `pm = "bun"`                 |
-| fnm   | any          | preferred Node version manager         |
+| fnm   | any          | preferred Node manager when no mirror is configured |
+| nub   | npm latest   | preferred when a mirror is configured (also acts as the pm) |
 | cargo | any          | used to `cargo install fnm` as fallback|
 | nvm   | any          | last managed fallback                  |
+
+## Runtime assembly chain
+
+Step 2 of the pipeline probes node / bun / pnpm / nub / fnm / cargo / nvm
+concurrently and logs each tool's version and path — transparency only; the
+real assembly happens on top of the probe results and always follows one
+first principle: **an existing tool that already satisfies the requirement is
+used as-is, never reinstalled**.
+
+node is the single hard prerequisite (min 24.15.0). When a satisfying install
+is probed, its directory becomes the runtime directory and nothing is
+downloaded. Only a missing or outdated node enters assembly, and the path
+taken is decided by two things: whether the configured package manager is
+nub, and whether mirrors are enabled.
+
+With mirrors on and pm="nub", assembly starts at the npm mirror: @nubjs/nub is
+installed into dshl's own cache (same mechanism as pnpm; the registry comes
+from mirrors.npm, so it is mirrorable by construction), and nub then provides
+node itself - `nub node install` pulls the dist through NODEJS_ORG_MIRROR
+(sourced from mirrors.nodejs_release) and `nub node which` resolves the
+binary directory, which becomes this run's runtime directory. Any failure in
+the chain falls through immediately to fnm (the preferred version manager
+without mirrors) -> cargo install fnm -> nvm -> auto-install into
+~/.cache/bin, ending with an in-UI link to the fnm install guide.
+
+Package managers follow the same use-what-exists/install-into-cache pattern:
+a missing bun is downloaded via GitHub mirror with official-script and npm
+fallbacks; pnpm and nub land via `npm install --prefix <cache>/dshl/<name>`
+with their node_modules/.bin injected into PATH. The mirror layer cross-cuts
+every network step above: mirrors.npm feeds npm/bun/pnpm/nub registries and
+installs alike, mirrors.nodejs_release feeds fnm/nvm/nub Node dist downloads,
+and everything is injected as temporary env or flags - never written to any
+global config file.
 
 ## Build
 

@@ -38,10 +38,14 @@ pub enum DshMode {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "lowercase")]
 pub enum Pm {
-    #[default]
     Npm,
     Bun,
     Pnpm,
+    /// Default: one Rust binary replaces bun (deps install), npx (bin runner)
+    /// and fnm/nvm (Node provisioning), installs from npm (mirrorable via
+    /// `mirrors.npm`), and is ~10x smaller than the bun download.
+    #[default]
+    Nub,
 }
 
 /// Domestic mirror addresses. An empty string means "do not use this mirror".
@@ -98,7 +102,7 @@ impl Default for Dsh {
     fn default() -> Self {
         Self {
             flags: "--profile web --host 127.0.0.1 --port 0".to_string(),
-            pm: Pm::Bun,
+            pm: Pm::Nub,
             version: "latest".to_string(),
             mode: DshMode::Hybrid,
             auto_update: true,
@@ -130,6 +134,12 @@ impl Dsh {
     /// True when the chosen pm needs pnpm installed.
     pub fn needs_pnpm(&self) -> bool {
         self.pm == Pm::Pnpm
+    }
+
+    /// True when the configured package manager is nub — its binary is
+    /// ensured in runtime_env and used for the dsh deps install.
+    pub fn needs_nub(&self) -> bool {
+        self.pm == Pm::Nub
     }
 }
 

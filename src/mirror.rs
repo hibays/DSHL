@@ -62,6 +62,23 @@ impl MirrorConfig {
         env
     }
 
+    /// Environment variables for nub. Its Node downloads honor the same
+    /// NODEJS_ORG_MIRROR convention as fnm/nvm (verified in the 0.7.5
+    /// binary), and its own registry ops read the npm registry config.
+    pub fn nub_env(&self) -> Vec<(String, String)> {
+        let mut v = Vec::new();
+        if self.enabled() {
+            if let Some(base) = &self.nodejs_release {
+                v.push(("NODEJS_ORG_MIRROR".into(), base.clone()));
+            }
+            if let Some(reg) = &self.npm {
+                v.push(("npm_config_registry".into(), reg.clone()));
+                v.push(("NPM_CONFIG_REGISTRY".into(), reg.clone()));
+            }
+        }
+        v
+    }
+
     /// Environment variables for cargo (sparse crates.io index).
     pub fn cargo_env(&self) -> Vec<(String, String)> {
         let mut env = Vec::new();

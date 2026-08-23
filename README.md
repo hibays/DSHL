@@ -84,11 +84,40 @@ DSHL 是一个轻量的原生启动器（Rust），以 [webui.me](https://webui.
 
 | 工具  | 版本         | 是否必需                        |
 |-------|--------------|---------------------------------|
-| Node  | `>= 24.15.0` | **始终**（缺失时经 fnm 装 `26`）|
+| Node  | `>= 24.15.0` | **始终**（缺失时按下方装配链安装）|
+| Nub   | npm latest   | 默认（`pm = "nub"`）；缺失时经 npm 镜像装入缓存 |
 | Bun   | `>= 1.3.14`  | 仅当 `pm = "bun"` 时           |
-| fnm   | 任意         | 首选 Node 版本管理器            |
+| fnm   | 任意         | 无镜像时的首选 Node 版本管理器  |
+| nub   | npm latest   | 启用镜像时的首选（同时承担 pm 职责）|
 | cargo | 任意         | 用于回退执行 `cargo install fnm`|
 | nvm   | 任意         | 最后的受管回退                  |
+
+## 运行时装配链
+
+启动流水线第 2 步会先并发探测 node / bun / pnpm / nub / fnm / cargo / nvm 并把
+各自的版本与路径写进日志——这一步只是透明汇报；真正的装配发生在探测结果之上，
+且始终遵守同一条第一原则：**系统里已有的可用工具原样使用，绝不重装**。
+
+node 是唯一硬前提（最低 24.15.0）。探测到已安装且满足最低版本时，其目录直接作
+为运行时目录，流水线其余部分照常进行；只有缺失或过旧时才进入装配流程。此时选
+择哪条路径由两个条件共同决定：配置里的包管理器是否为 nub，以及是否启用了镜像。
+
+启用镜像且包管理器为 nub 时，装配从 npm 镜像开始：把 @nubjs/nub 安装进 dshl 自
+己的缓存目录（与 pnpm 同一套机制，registry 由 mirrors.npm 注入，因此天然可镜
+像），随后交由 nub 提供 node——`nub node install` 按 NODEJS_ORG_MIRROR（同样来
+自 mirrors.nodejs_release）拉取发行版并放入其托管目录，`nub node which` 解析出
+二进制路径，该目录随即成为本次运行的运行时目录。链条上任何一环失败都会立即回
+退到下一段：fnm（无镜像环境下的首选版本管理器）→ `cargo install fnm` → nvm →
+自动安装 fnm 到 `~/.cache/bin`，全部失败时界面给出 fnm 安装指南链接。
+
+包管理器的装配遵循同样的"已有则用、缺失则装进缓存"模式：bun 缺失时经 GitHub
+镜像下载本体、官方脚本兜底、npm 再兜底；pnpm 与 nub 缺失时都以
+`npm install --prefix <cache>/dshl/<名字>` 落入各自缓存目录并把
+`node_modules/.bin` 注入 PATH。镜像层横切以上所有网络步骤——mirrors.npm 同时喂
+给 npm/bun/pnpm/nub 的 registry 与安装过程，mirrors.nodejs_release 喂给
+fnm/nvm/nub 的 Node 发行版下载——且只以临时环境变量或旗标注入，从不写入任何全
+局配置文件。
+
 
 ## 构建
 

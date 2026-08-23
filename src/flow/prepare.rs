@@ -96,6 +96,7 @@ fn pm_name(pm: Pm) -> &'static str {
         Pm::Npm => "npm",
         Pm::Bun => "bun",
         Pm::Pnpm => "pnpm",
+        Pm::Nub => "nub",
     }
 }
 
@@ -339,6 +340,15 @@ async fn install_dsh(
             c.arg(spec);
             c
         }
+        // nub add has no --cwd/--dir flag (verified against 0.7.5 help):
+        // run it with the cache dir as the working directory instead.
+        Pm::Nub => {
+            let mut c = Command::new(platform::tool("nub"));
+            c.arg("add");
+            c.arg(spec);
+            c.current_dir(&dir);
+            c
+        }
     };
     apply_path(&mut cmd, runtime);
     process::with_env(&mut cmd, &mirror.npm_env());
@@ -361,14 +371,17 @@ async fn query_latest_version(
     let env = mirror.npm_env();
     let path = runtime.augmented_path();
     let tool = match config.dsh.pm {
+        // nub exposes `view` too, but npm is always present and reads the
+        // same registry config — keep the query on the proven path.
         Pm::Npm | Pm::Bun => "npm",
+        // nub has a native `view` (registry query) - use the configured PM.
+        Pm::Nub => "nub",
         Pm::Pnpm => "pnpm",
     };
     let mut cmd = Command::new(platform::tool(tool));
     cmd.args(["view", "@deepseek-ai/dsh", "version"]);
     cmd.env("PATH", path);
     process::with_env(&mut cmd, &env);
-
     // npm view normally answers in ~1s; the timeout caps a slow/blocked
     // registry so the startup page is not held on a stall.
     let Ok(Ok(res)) =

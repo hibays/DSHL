@@ -18,18 +18,23 @@
 //! - [`bun`]: [`ensure_bun`] and the direct-download / official-script / npm
 //!   fallback chain.
 //! - [`pnpm`]: [`ensure_pnpm`] and the global-bin-dir resolution.
+//! - [`nub`]: [`ensure_nub`] — the @nubjs/nub toolkit installed via npm into
+//!   the cache (mirrorable); replaces the package manager and, in a future
+//!   tier, Node provisioning (`nub node install|which`).
 //! - [`download`]: zip download + extraction and small file helpers shared by
 //!   the installers.
 
 pub mod bun;
 pub mod download;
 pub mod node;
+pub mod nub;
 pub mod pnpm;
 pub mod runtime;
 pub mod stream;
 
 pub use bun::ensure_bun;
 pub use node::ensure_node;
+pub use nub::ensure_nub;
 pub use pnpm::ensure_pnpm;
 pub use runtime::Runtime;
 pub use stream::run_streaming;

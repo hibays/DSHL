@@ -81,6 +81,10 @@ pub async fn pnpm() -> Tool {
     probe_cmd("pnpm", &["--version"]).await
 }
 
+pub async fn nub() -> Tool {
+    probe_cmd("nub", &["--version"]).await
+}
+
 pub async fn fnm() -> Tool {
     probe_cmd("fnm", &["--version"]).await
 }
