@@ -23,6 +23,14 @@ use crate::progress::{self, StepStatus};
 /// How long to wait for dsh to print its web URL.
 const URL_TIMEOUT: Duration = Duration::from_secs(120);
 
+/// Hang-detection ceiling for spawn/drain tests. Generous ON PURPOSE: these
+/// assertions guard against INFINITE waits (lost wakeups, reaper stalls), so
+/// any finite ceiling keeps full detection power, while tight second-level
+/// budgets flaked on the shared windows-11-arm runner (>8s observed under CI
+/// load). Must stay below URL_TIMEOUT (120s) so a true hang still fails fast.
+#[cfg(test)]
+const HANG_CEILING: Duration = Duration::from_secs(60);
+
 /// Poll tick bounding every `next_line` wait while dsh has not been observed
 /// to exit: between ticks an OS-level liveness probe decides whether to keep
 /// waiting for output or to declare the startup failed.
@@ -336,7 +344,7 @@ mod tests {
 
         let started = std::time::Instant::now();
         let result = crate::runtime::block_on(async {
-            tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            tokio::time::timeout(HANG_CEILING, async {
                 stream_until_url(&child, &mut log_file).await
             })
             .await
@@ -348,12 +356,12 @@ mod tests {
             Ok(Err(e)) => {
                 eprintln!("early_exit after {elapsed:?}: {e}");
                 assert!(
-                    elapsed < std::time::Duration::from_secs(8),
+                    elapsed < HANG_CEILING,
                     "early_exit took too long: {elapsed:?}"
                 );
             }
             Err(_) => panic!(
-                "HANG REPRODUCED: stream_until_url did not return within 8s (elapsed {elapsed:?})"
+                "HANG REPRODUCED: stream_until_url did not return within the hang ceiling (elapsed {elapsed:?})"
             ),
         }
     }
@@ -405,7 +413,7 @@ mod tests {
             Some(Err(e)) => {
                 eprintln!("early_exit after {elapsed:?}: {e}");
                 assert!(
-                    elapsed < std::time::Duration::from_secs(8),
+                    elapsed < HANG_CEILING,
                     "early_exit took too long: {elapsed:?}"
                 );
             }
@@ -450,7 +458,7 @@ process.exit(1);
 
             let started = std::time::Instant::now();
             let result = crate::runtime::block_on(async {
-                tokio::time::timeout(std::time::Duration::from_secs(8), async {
+                tokio::time::timeout(HANG_CEILING, async {
                     stream_until_url(&child, &mut log_file).await
                 })
                 .await
@@ -462,12 +470,12 @@ process.exit(1);
                 Ok(Err(e)) => {
                     eprintln!("round {round}: early_exit after {elapsed:?}: {e}");
                     assert!(
-                        elapsed < std::time::Duration::from_secs(8),
+                        elapsed < HANG_CEILING,
                         "round {round}: early_exit took too long: {elapsed:?}"
                     );
                 }
                 Err(_) => panic!(
-                    "HANG REPRODUCED (round {round}): stream_until_url did not return within 8s"
+                    "HANG REPRODUCED (round {round}): stream_until_url did not return within the hang ceiling"
                 ),
             }
         }
@@ -582,7 +590,7 @@ process.exit(1);
 
         let started = std::time::Instant::now();
         let result = crate::runtime::block_on(async {
-            tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            tokio::time::timeout(HANG_CEILING, async {
                 stream_until_url(&child, &mut log_file).await
             })
             .await
@@ -599,7 +607,7 @@ process.exit(1);
             Ok(Err(e)) => {
                 eprintln!("early_exit after {elapsed:?}: {e}");
                 assert!(
-                    elapsed < std::time::Duration::from_secs(8),
+                    elapsed < HANG_CEILING,
                     "grandchild-held pipes stretched the failure past 8s: {elapsed:?}"
                 );
             }
@@ -635,7 +643,7 @@ process.exit(1);
 
         let started = std::time::Instant::now();
         let result = crate::runtime::block_on(async {
-            tokio::time::timeout(std::time::Duration::from_secs(8), async {
+            tokio::time::timeout(HANG_CEILING, async {
                 stream_until_url(&child, &mut log_file).await
             })
             .await
@@ -647,7 +655,7 @@ process.exit(1);
             Ok(Err(e)) => {
                 eprintln!("early_exit after {elapsed:?}: {e}");
                 assert!(
-                    elapsed < std::time::Duration::from_secs(8),
+                    elapsed < HANG_CEILING,
                     "silent death took too long to surface: {elapsed:?}"
                 );
             }

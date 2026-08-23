@@ -78,7 +78,9 @@ mod tests {
         let mut cmd = verbose_cmd();
         let result = crate::runtime::block_on(async {
             let child = AsyncChild::spawn(&mut cmd).expect("spawn");
-            tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            // 30s: the guarded failure mode is a PERMANENT park (never drains), which
+            // any finite budget catches; 5s flaked on the windows-11-arm runner.
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
                 let mut lines = Vec::new();
                 while let Some(l) = child.next_line().await {
                     lines.push(l);
@@ -96,7 +98,7 @@ mod tests {
                     lines.len()
                 );
             }
-            Err(_) => panic!("drain did not complete in 5s — lost-wakeup race is back"),
+            Err(_) => panic!("drain did not complete in 30s — lost-wakeup race is back"),
         }
     }
 }
