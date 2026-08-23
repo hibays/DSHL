@@ -101,7 +101,7 @@ pub(crate) fn stop_dsh() {
 /// which is the worse failure.
 pub(crate) fn stop_browser() {
     if state::IS_BROWSER.load(Ordering::SeqCst) {
-        let pid = state::BROWSER_PID.load(Ordering::SeqCst) as u32;
+        let pid = super::browser::pid_for_teardown();
         if pid != 0 {
             crate::debug::emit(&format!("exit: closing external browser (pid {pid})"));
             if !close_browser_window_gracefully(pid) {
@@ -172,7 +172,7 @@ pub fn shutdown(webui_running: bool) {
     // webui has no browser-side close hook, and the running sampler can miss
     // the last user move/resize in its final second. WebView mode records at
     // its close handler instead. No-op outside browser mode / pid==0.
-    super::geometry::remember_by_pid(state::BROWSER_PID.load(Ordering::SeqCst) as u32);
+    super::geometry::remember_by_pid(super::browser::pid_for_teardown());
     stop_keepalive();
     if webui_running {
         webui_exit();

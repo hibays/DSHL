@@ -129,10 +129,10 @@ fn locate_browser_pid() -> Option<u32> {
         if let Some(pid) = crate::platform::find_process_by_cmdline(&needle) {
             // Lost the race: another capture already stored a pid (and started
             // its own geometry sampler) — don't store again.
-            if state::BROWSER_PID.load(Ordering::SeqCst) != 0 {
+            if super::browser::pid() != 0 {
                 return None;
             }
-            state::BROWSER_PID.store(pid as usize, Ordering::SeqCst);
+            super::browser::set_pid(pid as usize);
             crate::debug::emit(&format!("browser window pid {pid} (port {port})"));
             return Some(pid);
         }
@@ -607,15 +607,7 @@ pub fn restore_from_tray(show_launcher: bool) {
     if browser_mode {
         // The browser is re-opened by `show_window`; mark a fresh probe pending
         // so the supervisor logs the newly located pid once capture lands.
-        state::BROWSER_CHECKED.store(false, Ordering::SeqCst);
-        // Fresh window: the supervisor's `BROWSER_WAS_SHOWN` latch must
-        // re-arm, otherwise the restored browser — which has not connected
-        // yet in its first loop ticks — would instantly read as "browser
-        // closed" and bounce straight back into the tray / shutdown.
-        state::BROWSER_WAS_SHOWN.store(false, Ordering::SeqCst);
-        // Fresh window: give the browser-pid capture a fresh retry budget too
-        // (each tray cycle is a new chance to locate the browser).
-        state::BROWSER_CAPTURE_ATTEMPTS.store(0, Ordering::SeqCst);
+        super::browser::note_window_recreated();
     }
     // `show_window` creates the window, applies geometry, shows with fallback,
     // navigates back, holds the WebView keep-alive and re-captures the browser
@@ -685,7 +677,7 @@ pub fn restore_from_tray(show_launcher: bool) {
     }
     state::WINDOW_ID.store(0, Ordering::SeqCst);
     state::WEBVIEW_HWND.store(0, Ordering::SeqCst);
-    state::BROWSER_PID.store(0, Ordering::SeqCst);
+    super::browser::clear_pid();
     state::TRAYED.store(true, Ordering::SeqCst);
     state::SETUP_DONE.store(true, Ordering::SeqCst);
     state::RESTORING.store(false, Ordering::SeqCst);

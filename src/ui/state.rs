@@ -23,18 +23,12 @@ pub(crate) static SHUTDOWN_REQUESTED: AtomicBool = AtomicBool::new(false);
 /// True when the startup window is an external browser (vs. embedded
 /// WebView).
 pub(crate) static IS_BROWSER: AtomicBool = AtomicBool::new(false);
-/// PID of the external browser window process (0 until captured).
-pub(crate) static BROWSER_PID: AtomicUsize = AtomicUsize::new(0);
-/// True once the browser pid has been probed at least once (logging only).
-pub(crate) static BROWSER_CHECKED: AtomicBool = AtomicBool::new(false);
 /// Browser-mode close-detection latch (the `webui::is_shown` fallback used
 /// when the browser pid was never captured): true once the CURRENT window's
 /// browser WebSocket has been seen connected. Cleared when the window goes
 /// to the tray and on every re-creation, so a freshly restored browser must
 /// connect again before its disappearance counts as a real close — otherwise
 /// the stale latch would instantly re-enter "browser closed" right after a
-/// tray restore while the new browser is still connecting.
-pub(crate) static BROWSER_WAS_SHOWN: AtomicBool = AtomicBool::new(false);
 /// HWND of the embedded WebView window (0 until captured).
 pub(crate) static WEBVIEW_HWND: AtomicUsize = AtomicUsize::new(0);
 /// True once [`super::setup`] has finished creating and showing the window.
@@ -59,10 +53,6 @@ pub(crate) static KEEPALIVE: Mutex<Option<crate::wskeep::KeepAlive>> = Mutex::ne
 /// Browser-pid capture retry bookkeeping. Lives in shared state so a tray
 /// restore can RESET the budget: each close->restore cycle is a fresh chance
 /// to locate the browser process, otherwise the second and later cycles lose
-/// pid-based close detection entirely (restore appears to work once, then
-/// every later cycle goes dead).
-pub(crate) static BROWSER_CAPTURE_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
-
 /// webui window id whose resources the supervisor should free (0 = none).
 /// Set when a window closes to the tray so its (large) struct + server + port
 /// are freed promptly at close time instead of being held while trayed and
@@ -129,9 +119,7 @@ pub fn reset_runtime_state() {
     LAUNCHED.store(false, Ordering::SeqCst);
     SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
     IS_BROWSER.store(false, Ordering::SeqCst);
-    BROWSER_PID.store(0, Ordering::SeqCst);
-    BROWSER_CHECKED.store(false, Ordering::SeqCst);
-    BROWSER_WAS_SHOWN.store(false, Ordering::SeqCst);
+    crate::ui::browser::reset_runtime_state();
     WEBVIEW_HWND.store(0, Ordering::SeqCst);
     SETUP_DONE.store(false, Ordering::SeqCst);
     CLOSE_PENDING.store(false, Ordering::SeqCst);

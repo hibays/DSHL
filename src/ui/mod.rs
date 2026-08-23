@@ -29,6 +29,7 @@
 pub mod assets;
 
 mod bindings;
+pub(crate) mod browser;
 mod crash;
 mod exit;
 mod geometry;
