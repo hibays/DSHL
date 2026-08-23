@@ -210,7 +210,14 @@ pub fn open_url_requested() -> bool {
 /// swap on theme change.
 pub fn set_icon(_dark: bool) {}
 
+/// True iff the status-notifier icon/indicator has been started.
+pub fn is_started() -> bool {
+    STARTED.load(Ordering::SeqCst)
+}
+
 /// Stop the tray thread. The GTK main loop is left running; the process
 /// exits right after, so no cleanup is strictly required (dlclose would
 /// race the GTK thread).
-pub fn shutdown() {}
+pub fn shutdown() {
+    STARTED.store(false, Ordering::SeqCst);
+}

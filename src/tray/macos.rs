@@ -173,6 +173,16 @@ pub fn open_url_requested() -> bool {
 /// platforms.
 pub fn set_icon(_dark: bool) {}
 
+/// True iff the tray status item has been created and is visible.
+pub fn is_started() -> bool {
+    BUILT.load(Ordering::SeqCst)
+}
+
 /// Nothing to clean up: the status item is intentionally leaked and the
 /// process exits right after this.
-pub fn shutdown() {}
+pub fn shutdown() {
+    // Reset intent + built flags so a subsequent `start()` in a plugin-track
+    // shutdown/start cycle builds a fresh status item.
+    STARTED.store(false, Ordering::SeqCst);
+    BUILT.store(false, Ordering::SeqCst);
+}

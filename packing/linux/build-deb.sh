@@ -60,6 +60,8 @@ DSHL — DeepSeek Harness web launcher
 Licensed under the MIT License.
 EOF
 
+# NOTE: unquoted <<EOF so ${VERSION} expands; backticks in the description
+# are escaped (\`) so they are NOT executed as command substitution.
 cat > "$ROOT/DEBIAN/control" <<EOF
 Package: dshl
 Version: ${VERSION}
@@ -69,7 +71,7 @@ Architecture: ${ARCH}
 Maintainer: dshl maintainers <dshl@users.noreply.github.com>
 Description: DeepSeek Harness web launcher
  dshl is a webui.me wrapper that checks the runtime, installs dsh when needed,
- boots `dsh web`, and routes the browser to it.
+ boots \`dsh web\`, and routes the browser to it.
 EOF
 
 mkdir -p "$OUTDIR"

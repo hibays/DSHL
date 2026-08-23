@@ -1,0 +1,23 @@
+{
+  "name": "dsh-launcher-monorepo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "dsh-launcher monorepo — hosts the three @dshl/* npm packages (control aggregator + native/pipe backends) so they can be linked, developed, and tested together. The Rust workspace lives at the same root; the packages here are only the JS plugin track.",
+  "type": "module",
+  "workspaces": [
+    "plugins/dshl-native",
+    "plugins/dshl-pipe",
+    "plugins/dshl-control"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "scripts": {
+    "build:native": "node plugins/dshl-native/scripts/build-native.mjs --release",
+    "build:native:debug": "node plugins/dshl-native/scripts/build-native.mjs",
+    "check": "node --check plugins/dshl-control/src/index.js && node --check plugins/dshl-control/src/plugin-guard.js && node --check plugins/dshl-control/src/ui.js && node --check plugins/dshl-native/src/index.js && node --check plugins/dshl-native/src/loader.js && node --check plugins/dshl-native/scripts/build-native.mjs && node --check plugins/dshl-pipe/src/index.js && node --check plugins/dshl-pipe/src/client.js",
+    "pack:dry": "npm pack --workspaces --dry-run",
+    "publish:all": "npm run check && npm pack --workspaces --dry-run && npm publish -w plugins/dshl-native --access public && npm publish -w plugins/dshl-pipe --access public && npm publish -w plugins/dshl-control --access public"
+  }
+}

@@ -97,6 +97,24 @@ pub struct AsyncChild {
     inner: Arc<Inner>,
 }
 
+/// Spawn a prepared tokio command regardless of the caller's async context.
+///
+/// tokio's Unix pipe registration needs a driver at `spawn()` time and panics
+/// with "there is no reactor running" when called from a plain thread;
+/// Windows tolerates its absence, which made sync-context spawns pass locally
+/// but fail on Linux CI. Inside a runtime we spawn directly; outside one we
+/// hop through the global runtime — the returned child's pipes stay bound to
+/// it, which is fine because the global runtime lives for `'static`.
+fn spawn_in_runtime_context(
+    tcmd: &mut tokio::process::Command,
+) -> io::Result<tokio::process::Child> {
+    if tokio::runtime::Handle::try_current().is_ok() {
+        tcmd.spawn()
+    } else {
+        crate::runtime::block_on(async { tcmd.spawn() })
+    }
+}
+
 impl AsyncChild {
     /// Spawn with piped stdout/stderr (and no stdin).
     ///
@@ -128,11 +146,12 @@ impl AsyncChild {
         // (creation_flags, etc.) survive the conversion to tokio, which spawns
         // the wrapped std Command.
         let mut tcmd = super::capture::to_tokio(cmd);
-        let mut child = tcmd
-            .stdout(Stdio::piped())
+        tcmd.stdout(Stdio::piped())
             .stderr(Stdio::piped())
-            .stdin(Stdio::null())
-            .spawn()?;
+            .stdin(Stdio::null());
+        // `spawn()` panics on Unix when no tokio runtime context is active
+        // (Windows tolerates it) — the helper makes both behave the same.
+        let mut child = spawn_in_runtime_context(&mut tcmd)?;
         #[cfg(target_os = "windows")]
         win_job::assign_raw(child.raw_handle().expect("spawned child has a handle"));
         let pid = child.id().expect("spawned child has an id");
@@ -303,10 +322,38 @@ impl AsyncChild {
         *self.inner.code.lock().unwrap()
     }
 
+    /// True once the process itself has exited. Its output pipes may still be
+    /// open (a detached grandchild can hold the write ends), so this is weaker
+    /// than [`AsyncChild::next_line`] returning `None` — that additionally
+    /// waits for both streams to drain (or the EOF grace to elapse).
+    pub fn has_exited(&self) -> bool {
+        self.inner.process_done.load(Ordering::SeqCst)
+    }
+
     /// Drain all remaining lines, returning the exit code.
     pub async fn drain(self) -> Option<i32> {
         while self.next_line().await.is_some() {}
         self.exit_code()
+    }
+}
+
+/// Push one read line into the shared queue and wake the consumer.
+fn feed_line(inner: &Inner, line: &str, is_stdout: bool) {
+    let trimmed = line.trim_end().to_string();
+    let out = if is_stdout {
+        Output::Stdout(trimmed)
+    } else {
+        Output::Stderr(trimmed)
+    };
+    inner.lines.lock().unwrap().push_back(out);
+    inner.notify.notify_one();
+}
+
+/// Mark one stream as drained; wake the consumer when both pipes hit EOF.
+fn stream_done(inner: &Inner) {
+    if inner.streams_remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
+        inner.streams_done.store(true, Ordering::SeqCst);
+        inner.notify.notify_one();
     }
 }
 
@@ -323,23 +370,11 @@ async fn read_lines(
         line.clear();
         match reader.read_line(&mut line).await {
             Ok(0) => break,
-            Ok(_) => {
-                let trimmed = line.trim_end().to_string();
-                let out = if is_stdout {
-                    Output::Stdout(trimmed)
-                } else {
-                    Output::Stderr(trimmed)
-                };
-                inner.lines.lock().unwrap().push_back(out);
-                inner.notify.notify_one();
-            }
+            Ok(_) => feed_line(&inner, &line, is_stdout),
             Err(_) => break,
         }
     }
-    if inner.streams_remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
-        inner.streams_done.store(true, Ordering::SeqCst);
-        inner.notify.notify_one();
-    }
+    stream_done(&inner);
 }
 
 /// Drain a blocking pipe (raw hidden-console spawn's stdio) line by line into
@@ -360,23 +395,11 @@ fn spawn_blocking_reader(
             line.clear();
             match reader.read_line(&mut line) {
                 Ok(0) => break,
-                Ok(_) => {
-                    let trimmed = line.trim_end().to_string();
-                    let out = if is_stdout {
-                        Output::Stdout(trimmed)
-                    } else {
-                        Output::Stderr(trimmed)
-                    };
-                    inner.lines.lock().unwrap().push_back(out);
-                    inner.notify.notify_one();
-                }
+                Ok(_) => feed_line(&inner, &line, is_stdout),
                 Err(_) => break,
             }
         }
-        if inner.streams_remaining.fetch_sub(1, Ordering::SeqCst) == 1 {
-            inner.streams_done.store(true, Ordering::SeqCst);
-            inner.notify.notify_one();
-        }
+        stream_done(&inner);
     });
 }
 
@@ -437,8 +460,16 @@ mod tests {
         // write end, then exits. The grandchild keeps the pipe open, so EOF
         // never arrives — completion must be driven by the process exit, not
         // pipe EOF.
+        #[cfg(windows)]
         let mut cmd = Command::new(std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".into()));
+        #[cfg(windows)]
         cmd.args(["/c", "echo hello & start /b cmd /c timeout /t 60 & exit"]);
+        // Unix twin: a backgrounded sleep inherits the stdout write end and
+        // plays the lingering grandchild.
+        #[cfg(not(windows))]
+        let mut cmd = Command::new("sh");
+        #[cfg(not(windows))]
+        cmd.args(["-c", "echo hello & sleep 60 & exit 0"]);
         let child = AsyncChild::spawn(&mut cmd).expect("spawn");
         let pid = child.pid().expect("pid");
         let result = crate::runtime::block_on(async {
@@ -467,8 +498,14 @@ mod tests {
 
     #[test]
     fn drains_simple_child() {
+        #[cfg(windows)]
         let mut cmd = Command::new(std::env::var("COMSPEC").unwrap_or_else(|_| "cmd".into()));
+        #[cfg(windows)]
         cmd.args(["/c", "echo hello & echo world"]);
+        #[cfg(not(windows))]
+        let mut cmd = Command::new("sh");
+        #[cfg(not(windows))]
+        cmd.args(["-c", "echo hello; echo world"]);
         let child = AsyncChild::spawn(&mut cmd).expect("spawn");
         let result = crate::runtime::block_on(async {
             tokio::time::timeout(Duration::from_secs(5), async {

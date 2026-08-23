@@ -37,7 +37,7 @@ use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::OnceLock;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -82,19 +82,13 @@ fn runtime_path() -> Option<std::ffi::OsString> {
     LAST_RUNTIME_PATH.lock().unwrap().clone()
 }
 
-/// A per-launch random token (time ^ pid ^ counter), enough to keep a local
-/// attacker from guessing the endpoint without reading the child's env.
+/// A per-launch bearer token from the platform CSPRNG (UUID v4 = 122 bits of
+/// entropy), same source as the PTY server token. The historic
+/// `time ^ pid ^ counter` scheme was guessable: an attacker who knew the rough
+/// launch time could brute-force the endpoint online and drive
+/// shutdown/restart/open-terminal.
 fn generate_token() -> String {
-    use std::sync::atomic::{AtomicU64, Ordering};
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos())
-        .unwrap_or(0);
-    let pid = u128::from(std::process::id());
-    let n = now ^ (pid << 32) ^ (u128::from(COUNTER.fetch_add(1, Ordering::Relaxed)) << 96);
-    format!("{n:032x}")
+    uuid::Uuid::new_v4().simple().to_string()
 }
 
 /// Start the control server: bind a loopback listener, store the endpoint,
@@ -117,9 +111,12 @@ async fn bind() -> std::io::Result<()> {
     let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).await?;
     let addr = listener.local_addr()?;
     let _ = ENDPOINT.set(Endpoint { addr, token });
-    if let Some(url) = ENDPOINT.get().map(Endpoint::url) {
-        crate::debug::emit(&format!("control endpoint: {url}"));
-    }
+    // Redacted: logs land on disk, so never emit the token-bearing URL —
+    // the port alone is diagnostic.
+    crate::debug::emit(&format!(
+        "control endpoint: 127.0.0.1:{}",
+        ENDPOINT.get().map(|e| e.addr.port()).unwrap_or(0)
+    ));
     std::mem::drop(crate::runtime::spawn(accept_loop(listener)));
     Ok(())
 }

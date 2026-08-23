@@ -1,9 +1,8 @@
 // Build the dshl-native napi-rs addon and drop a `.node` beside the plugin.
 //
 // Produces `native/dshl-native.<platform>-<arch>.node` (gitignored), which the
-// plugin's `src/native.js` loader resolves before falling back to the control
-// pipe. For published plugin-track installs this is replaced by the per-platform
-// `@dshl/native-*` optionalDependency packages instead.
+// plugin's `src/loader.js` resolves before falling back to the per-platform
+// `@dshl/native-*` optionalDependency packages.
 //
 // Usage: node scripts/build-native.mjs [--release]
 import { execSync } from 'node:child_process'

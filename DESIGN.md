@@ -4,7 +4,7 @@ description: DeepSeek Harness Launcher — Swiss International launch console, l
 colors:
   ultramarine: "#2f6fe4"
   ultramarine-strong: "#2258c4"
-  ultramarine-soft: "#2457c4"
+  ultramarine-soft: "#5685e0"
   accent-ink: "#ffffff"
   ground: "#ffffff"
   ground-dark: "#0f0f11"
@@ -121,7 +121,7 @@ Two authored grounds, one ultramarine accent, and a strict functional signal set
 ### Primary
 - **Ultramarine** (#2f6fe4; dark #3a76e6): the only brand accent. Fills the primary button, marks the running step number, and tints key config values.
 - **Ultramarine Strong** (#2258c4): the primary button's hover/press.
-- **Ultramarine Soft** (#2457c4 on white, #8aaaf7 on dark): the accent tuned for text legibility — config values, status stamp text.
+- **Ultramarine Soft** (#5685e0 on white, #8aaaf7 on dark): the accent tuned for text legibility — config values, status stamp text.
 - **Accent Ink** (#ffffff): text placed on ultramarine fills.
 
 ### Neutral

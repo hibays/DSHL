@@ -1,12 +1,22 @@
-name: Release
+name: Release (Track A)
 
 on:
   push:
     tags:
       - 'v*'
 
+concurrency:
+  # A same-tag re-run replaces the in-flight one; different tags never clash.
+  group: release-${{ github.ref }}
+  cancel-in-progress: true
+
 permissions:
   contents: write
+
+# Track A: standalone installer artifacts (.exe / .deb / .dmg / portable zip).
+# The dshl binary is built from `crates/dshl` and bundles the full kernel.
+# Native plugin artifacts (.node) and npm packages are handled by
+# release-native.yml and release-plugins.yml respectively.
 
 jobs:
   build:
@@ -19,6 +29,16 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact: windows-x86_64
+            ext: .exe
+            family: windows
+          # Native Windows ARM64 build — webui-rs is now a git source
+          # dependency (no more prebuilt C library), so aarch64-pc-windows-msvc
+          # compiles cleanly on the windows-11-arm hosted runner. The default
+          # host triple on this runner IS aarch64-pc-windows-msvc, so no
+          # `targets:` argument is needed below.
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            artifact: windows-aarch64
             ext: .exe
             family: windows
           - os: ubuntu-latest
@@ -53,6 +73,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
       # Cross-compiling Linux aarch64 needs a cross linker + libc headers.
       - name: Install aarch64 cross toolchain
         if: matrix.target == 'aarch64-unknown-linux-gnu'
@@ -60,85 +84,67 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y gcc-aarch64-linux-gnu
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          # cc-rs needs the cross compiler for webui's C library, not just the
+          # linker — without this the linux-aarch64 leg dies at first tag.
+          echo "CC_AARCH64_UNKNOWN_LINUX_GNU=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "AR_AARCH64_UNKNOWN_LINUX_GNU=aarch64-linux-gnu-ar" >> "$GITHUB_ENV"
 
       - name: Resolve version
         shell: bash
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
-      - name: Build
-        run: cargo build --release --locked --target ${{ matrix.target }}
+      - name: Build dshl binary
+        run: cargo build --release --locked --target ${{ matrix.target }} -p dshl
 
       - name: Stage files
         shell: bash
         run: |
           set -euo pipefail
           BIN="target/${{ matrix.target }}/release/dshl${{ matrix.ext }}"
-          rm -rf stage portable && mkdir -p stage portable
-          cp "$BIN" "stage/dshl${{ matrix.ext }}"
-          cp README.md stage/
-          cp README_en.md stage/
-          # dshl.toml ships ONLY in the portable zip. Installers (NSIS/deb/dmg)
-          # intentionally ship without a config: the launcher auto-generates a
-          # commented default template in the platform config directory when no
-          # config file is found.
-          cp dshl.example.toml portable/dshl.toml
+          bash scripts/package.sh stage --bin "$BIN"
 
       - name: Package zip
         shell: bash
-        run: |
-          set -euo pipefail
-          STAGE="dshl-${{ matrix.artifact }}"
-          rm -rf "$STAGE" && mkdir -p "$STAGE"
-          cp stage/* "$STAGE/"
-          cp portable/dshl.toml "$STAGE/"
-          PY="$(command -v python3 || command -v python)"
-          "$PY" - "$STAGE" "dshl-${{ matrix.artifact }}.zip" <<'PY'
-          import os, sys, zipfile
-          stage, out = sys.argv[1], sys.argv[2]
-          with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-              for root, _, files in os.walk(stage):
-                  for f in files:
-                      full = os.path.join(root, f)
-                      z.write(full, os.path.relpath(full, stage))
-          PY
+        run: bash scripts/package.sh portable --zip "dshl-${{ matrix.artifact }}.zip"
 
       - name: Install NSIS (Windows installer)
         if: matrix.family == 'windows'
         shell: pwsh
-        run: choco install nsis -y --no-progress
+        # On windows-11-arm we download the official NSIS 3.10 zip (NSIS ships
+        # a portable x86 build that runs under WoW64 emulation on ARM64
+        # Windows). choco on ARM64 is unreliable for NSIS specifically.
+        # windows-latest (x64) keeps using choco as before.
+        run: |
+          if ($env:RUNNER_OS -eq 'Windows' -and $env:PROCESSOR_ARCHITECTURE -eq 'ARM64') {
+            # ARM64 host (windows-11-arm): the official NSIS zip ships a
+            # portable x86 build that runs under WoW64 emulation. The old
+            # Is64BitProcess probe could not actually tell the hosts apart.
+            $ErrorActionPreference = 'Stop'
+            $ProgressPreference = 'SilentlyContinue'
+            $url = 'https://prdownloads.sourceforge.net/nsis/nsis-3.10.zip'
+            Invoke-WebRequest -Uri $url -OutFile nsis.zip
+            Expand-Archive -Path nsis.zip -DestinationPath C:\nsis -Force
+            Remove-Item nsis.zip
+            Add-Content $env:GITHUB_PATH 'C:\nsis\nsis-3.10'
+            Write-Host 'NSIS 3.10 installed at C:\nsis\nsis-3.10'
+          } else {
+            choco install nsis -y --no-progress
+          }
 
       - name: Package Windows installer (NSIS)
         if: matrix.family == 'windows'
         shell: bash
-        run: |
-          set -euo pipefail
-          cp packing/windows/dsh.ico stage/
-          if command -v makensis >/dev/null 2>&1; then
-            MAKENSIS=makensis
-          else
-            MAKENSIS="/c/Program Files (x86)/NSIS/makensis.exe"
-          fi
-          # Absolute paths: some makensis builds resolve File/Icon paths
-          # against the script's directory instead of the working directory.
-          "$MAKENSIS" -V3 \
-            "-DSTAGE_DIR=$GITHUB_WORKSPACE/stage" \
-            "-DPRODUCT_VERSION=$VERSION" \
-            "-DOUTFILE=$GITHUB_WORKSPACE/dshl-${{ matrix.artifact }}-setup.exe" \
-            packing/windows/dshl.nsi
+        run: bash scripts/package.sh nsis --version "$VERSION" --artifact "${{ matrix.artifact }}"
 
       - name: Package Linux installer (.deb)
         if: matrix.family == 'linux'
         shell: bash
-        run: |
-          bash packing/linux/build-deb.sh \
-            "stage/dshl" "$VERSION" "${{ matrix.deb_arch }}" "."
+        run: bash scripts/package.sh deb --version "$VERSION" --deb-arch "${{ matrix.deb_arch }}"
 
       - name: Package macOS installer (.dmg)
         if: matrix.family == 'macos'
         shell: bash
-        run: |
-          bash packing/macos/build-dmg.sh \
-            "stage/dshl" "$VERSION" "." "" "dshl-${{ matrix.artifact }}.dmg"
+        run: bash scripts/package.sh dmg --version "$VERSION" --artifact "${{ matrix.artifact }}"
 
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4

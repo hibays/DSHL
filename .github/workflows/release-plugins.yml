@@ -1,0 +1,125 @@
+name: Release (Track B — npm aggregator)
+
+# Publishes the three aggregator npm packages:
+#   - @dshl/native   (depends on the six @dshl/native-* platform subpackages)
+#   - @dshl/pipe
+#   - @dshl/control (depends on @dshl/native + @dshl/pipe)
+#
+# This workflow runs AFTER release-native.yml has finished publishing all six
+# platform subpackages, so the `optionalDependencies` referenced from
+# `@dshl/native` resolve on npm at install time.
+#
+# Triggered by the same tag push (v*). Uses `workflow_run` to wait for
+# release-native.yml's completion.
+
+on:
+  workflow_run:
+    workflows: ["Release (Track B — native .node)"]
+    types:
+      - completed
+
+permissions:
+  contents: read
+  id-token: write  # npm provenance
+
+jobs:
+  guard:
+    name: Only on tag, only if native succeeded
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    outputs:
+      ref: ${{ steps.resolve.outputs.ref }}
+      version: ${{ steps.resolve.outputs.version }}
+    steps:
+      - name: Resolve tag from upstream workflow
+        id: resolve
+        shell: bash
+        run: |
+          # workflow_run.payload defaults to the ref of the *event* (the
+          # workflow_run trigger), not the upstream workflow's git ref. The
+          # GitHub REST API gives us the upstream's head_branch which for a
+          # tag push is the tag name.
+          UPSTREAM=${{ github.event.workflow_run.id }}
+          HEAD_BRANCH=${{ github.event.workflow_run.head_branch }}
+          # head_branch for a tag-triggered workflow is the tag name (refs/tags/vX.Y.Z)
+          if [[ ! "$HEAD_BRANCH" =~ ^v ]]; then
+            echo "upstream was not triggered by a tag push (head_branch=$HEAD_BRANCH); skipping"
+            exit 78
+          fi
+          echo "ref=$HEAD_BRANCH" >> "$GITHUB_OUTPUT"
+          echo "version=${HEAD_BRANCH#v}" >> "$GITHUB_OUTPUT"
+
+  publish:
+    name: Publish aggregator packages
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    needs: guard
+    if: ${{ needs.guard.outputs.ref != '' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.guard.outputs.ref }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Sync version into all three package.json files
+        shell: bash
+        run: node scripts/bump-versions.mjs "$VERSION"
+
+      - name: Verify npm pack contents (dry run)
+        shell: bash
+        run: |
+          npm pack --workspaces --dry-run
+
+      - name: Publish @dshl/native
+        shell: bash
+        working-directory: plugins/dshl-native
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::notice::NPM_TOKEN not configured - skipping npm publish (no-op, not an error)"
+            exit 0
+          fi
+          npm publish --access public --provenance
+
+      - name: Publish @dshl/pipe
+        shell: bash
+        working-directory: plugins/dshl-pipe
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::notice::NPM_TOKEN not configured - skipping npm publish (no-op, not an error)"
+            exit 0
+          fi
+          npm publish --access public --provenance
+
+      # Control must come last: it lists @dshl/native + @dshl/pipe as
+      # optionalDependencies, and npm rejects publish if the published
+      # version of an optionalDependency is not yet resolvable.
+      - name: Publish @dshl/control
+        shell: bash
+        working-directory: plugins/dshl-control
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::notice::NPM_TOKEN not configured - skipping npm publish (no-op, not an error)"
+            exit 0
+          fi
+          npm publish --access public --provenance
+
+      - name: Summary
+        shell: bash
+        run: |
+          echo "### Published @dshl/*@${{ needs.guard.outputs.version }}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`@dshl/native-{win32-x64-msvc,win32-arm64-msvc,darwin-x64,darwin-arm64,linux-x64-gnu,linux-arm64-gnu}\` (release-native.yml)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`@dshl/native\` (aggregator)" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`@dshl/pipe\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- \`@dshl/control\` (depends on native + pipe)" >> "$GITHUB_STEP_SUMMARY"

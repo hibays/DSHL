@@ -7,8 +7,10 @@ use std::process::Command;
 
 /// Force-kill a process and, on Windows, its descendants.
 ///
-/// On Windows `taskkill /F /T` walks the parent-child tree; on Unix we send
-/// `SIGKILL`. Graceful stopping is done separately via
+/// On Windows `taskkill /F /T` walks the parent-child tree; on Unix we signal
+/// the process group when the target leads one (the common case for children
+/// dshl spawns — they run in their own process group), falling back to the
+/// single process otherwise. Graceful stopping is done separately via
 /// [`crate::process::AsyncChild::signal_stop`].
 ///
 /// The command runs through `prepare_spawn` so the console helper never pops a
@@ -19,14 +21,41 @@ pub fn kill_tree(pid: u32) {
         c.args(["/F", "/T", "/PID", &pid.to_string()]);
         c
     } else {
-        let mut c = Command::new("kill");
-        c.args(["-KILL", &pid.to_string()]);
-        c
+        // No external command: signal via libc directly (see below).
+        #[cfg(unix)]
+        {
+            unix_kill_tree(pid);
+            return;
+        }
+        #[cfg(not(unix))]
+        {
+            unreachable!("neither Windows nor Unix");
+        }
     };
     cmd.stdout(std::process::Stdio::null())
         .stderr(std::process::Stdio::null());
     crate::process::capture::prepare_spawn(&mut cmd);
     let _ = cmd.status();
+}
+
+/// Unix force-kill without spawning a `kill` binary: signal the target's
+/// process group first (`-pgid`) so descendants die too — dshl's spawns create
+/// their own process groups, so this is what makes it a *tree* kill — and
+/// fall back to signalling just the process when no group leads it. The
+/// group kill targets every member except the caller; the follow-up single
+/// kill covers the leader itself.
+#[cfg(unix)]
+fn unix_kill_tree(pid: u32) {
+    // SAFETY: kill(2) only sends signals; ESRCH (no such process) is fine.
+    unsafe {
+        let pid = pid as libc::pid_t;
+        if libc::getpgid(pid) == pid {
+            // The process leads its own group: signal the whole group, then
+            // the leader (group signals skip the caller, not the leader).
+            let _ = libc::kill(-pid, libc::SIGKILL);
+        }
+        let _ = libc::kill(pid, libc::SIGKILL);
+    }
 }
 
 /// True if the process identified by `pid` is still running.

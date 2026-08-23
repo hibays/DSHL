@@ -18,7 +18,9 @@
 //! 3. [`stop_tray`]      — remove the tray icon and stop its threads.
 //! 4. [`stop_dsh`]       — graceful SIGINT/SIGTERM stop of the supervised dsh
 //!    (commits its session log), the same mechanism on every OS.
-//! 5. [`webui_clean`]    — final webui cleanup: waits for the server threads
+//! 5. [`stop_browser`]   — close the external browser process webui launched
+//!    (browser mode only), which webui's own exit does not terminate.
+//! 6. [`webui_clean`]    — final webui cleanup: waits for the server threads
 //!    and releases the WebView2 controller, so the WebView2 browser processes
 //!    exit on their own.
 //!
@@ -29,9 +31,8 @@
 
 use std::sync::atomic::Ordering;
 
-use webui::webui;
-
 use super::state;
+use webui::webui;
 
 /// Ask the launcher to shut down. Thread-safe; callable from any thread
 /// (SIGINT/SIGTERM handler, webui event thread, tray menu, window close
@@ -85,6 +86,65 @@ pub(crate) fn stop_dsh() {
     super::launch::kill_dsh();
 }
 
+/// Close the external browser process (browser mode only). webui's exit()
+/// does not terminate the external browser it launched, so we close it
+/// explicitly to avoid leaving a stray browser window behind on shutdown.
+///
+/// Windows first asks the browser's own top-level window to close
+/// (`WM_CLOSE`): the scoped, graceful path — the browser reacts exactly as
+/// if the user clicked the window's X, so a single-instance browser (Firefox,
+/// or Chrome when the launcher's window shares a profile process) keeps the
+/// user's other windows and their unsaved state alive. Only when no window
+/// can be found, or the window outlives the close request (e.g. a
+/// beforeunload prompt with nobody left to answer it), do we fall back to the
+/// hard `kill_tree`: a surviving browser process would block clean restarts,
+/// which is the worse failure.
+pub(crate) fn stop_browser() {
+    if state::IS_BROWSER.load(Ordering::SeqCst) {
+        let pid = state::BROWSER_PID.load(Ordering::SeqCst) as u32;
+        if pid != 0 {
+            crate::debug::emit(&format!("exit: closing external browser (pid {pid})"));
+            if !close_browser_window_gracefully(pid) {
+                crate::platform::kill_tree(pid);
+            }
+        }
+    }
+}
+
+/// Post `WM_CLOSE` to the pid's visible top-level window and wait a bounded
+/// time for the window to disappear. True when the window is gone (or was
+/// never there — the caller treats "nothing to close gracefully" the same as
+/// "could not close gracefully" and applies the hard fallback).
+#[cfg(target_os = "windows")]
+fn close_browser_window_gracefully(pid: u32) -> bool {
+    use windows::Win32::Foundation::{HWND, LPARAM, WPARAM};
+    use windows::Win32::UI::WindowsAndMessaging::{PostMessageW, WM_CLOSE};
+
+    let Some(hwnd) = crate::platform::find_hwnd_by_pid(pid) else {
+        return false;
+    };
+    let hwnd = HWND(hwnd as *mut _);
+    // SAFETY: PostMessageW only queues the close request; unlike SendMessageW
+    // it never blocks our shutdown thread on the browser's message loop.
+    let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, WPARAM(0), LPARAM(0)) };
+    // Bounded wait (3s): the browser normally destroys the window within a
+    // message-loop turn or two; a beforeunload dialog hangs until answered.
+    for _ in 0..60 {
+        if !crate::platform::is_window_alive(hwnd.0 as usize) {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    !crate::platform::is_window_alive(hwnd.0 as usize)
+}
+
+#[cfg(not(target_os = "windows"))]
+fn close_browser_window_gracefully(_pid: u32) -> bool {
+    // No HWND concept outside Windows — the caller goes straight to
+    // `kill_tree`, unchanged historical behaviour.
+    false
+}
+
 /// Final webui cleanup: waits for the remaining server threads and releases
 /// the WebView2 controller. Idempotent (it calls `webui_exit()` internally
 /// when needed).
@@ -108,11 +168,17 @@ pub(crate) fn webui_clean() {
 /// the WebView2 browser processes then exit on their own, which is what makes
 /// the old force-reap of `msedgewebview2.exe` unnecessary.
 pub fn shutdown(webui_running: bool) {
+    // Record the browser window's FINAL geometry before anything closes it:
+    // webui has no browser-side close hook, and the running sampler can miss
+    // the last user move/resize in its final second. WebView mode records at
+    // its close handler instead. No-op outside browser mode / pid==0.
+    super::geometry::remember_by_pid(state::BROWSER_PID.load(Ordering::SeqCst) as u32);
     stop_keepalive();
     if webui_running {
         webui_exit();
     }
     stop_tray();
     stop_dsh();
+    stop_browser();
     webui_clean();
 }

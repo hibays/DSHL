@@ -1,11 +1,12 @@
 {
   "name": "@dshl/control",
   "version": "0.1.0",
-  "description": "dshl control bridge: connects the dsh web UI to the running dshl launcher over the control pipe (DSHL_CONTROL_URL)",
+  "description": "dshl control bridge — the top-level abstraction plugin that folds the native (dshl-native addon) and pipe (legacy control pipe) backends into a unified nativeCapabilities service, exposes HTTP routes, and hosts the plugin-guard (desktopPlugins) contract.",
   "type": "module",
   "main": "src/index.js",
   "files": [
     "src",
+    "assets",
     "cordis.patch.yml",
     "LICENSE",
     "README.md"
@@ -18,8 +19,32 @@
   "peerDependencies": {
     "@deepseek-ai/cordis": ">=4.0.0"
   },
+  "optionalDependencies": {
+    "@dshl/native": "^0.1.0",
+    "@dshl/pipe": "^0.1.0"
+  },
   "engines": {
     "node": ">=22"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "author": "hibays",
+  "homepage": "https://github.com/hibays/dsh-launcher/tree/main/plugins/dshl-control",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hibays/dsh-launcher.git",
+    "directory": "plugins/dshl-control"
+  },
+  "bugs": {
+    "url": "https://github.com/hibays/dsh-launcher/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dshl",
+    "deepseek",
+    "harness",
+    "launcher",
+    "control",
+    "plugin",
+    "cordis"
+  ]
 }

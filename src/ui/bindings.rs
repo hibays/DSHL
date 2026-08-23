@@ -25,13 +25,12 @@ fn exit_app(_e: webui::Event) {
 }
 
 fn retry(_e: webui::Event) {
-    let stale = state::STALE_PID.load(std::sync::atomic::Ordering::SeqCst);
+    let stale = progress::stale_pid();
     if stale != 0 && crate::platform::process_alive(stale) {
         progress::set_error(t!("ui.bindings.stale_running", pid = stale));
         return;
     }
     if stale != 0 {
-        state::STALE_PID.store(0, std::sync::atomic::Ordering::SeqCst);
         progress::set_stale_pid(None);
     }
     launch_flow();
@@ -41,7 +40,7 @@ fn retry(_e: webui::Event) {
 /// button on the startup page (explicit confirmation). The kill itself is
 /// async so the webui thread is not blocked; on success the launch retries.
 fn force_kill_stale(_e: webui::Event) {
-    let pid = state::STALE_PID.load(std::sync::atomic::Ordering::SeqCst);
+    let pid = progress::stale_pid();
     if pid == 0 {
         return;
     }
@@ -61,7 +60,6 @@ fn force_kill_stale(_e: webui::Event) {
             progress::set_error(t!("ui.bindings.kill_failed", pid = pid));
             return;
         }
-        state::STALE_PID.store(0, std::sync::atomic::Ordering::SeqCst);
         progress::set_stale_pid(None);
         progress::log(t!("ui.bindings.killed", pid = pid));
         launch_flow();

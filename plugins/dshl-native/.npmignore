@@ -1,0 +1,18 @@
+# Development-only files never published to npm.
+# (package.json `files` is the whitelist; this is belt-and-suspenders.)
+
+# Local native build artifacts (built by scripts/build-native.mjs)
+native/
+
+# Build scripts themselves (not needed at runtime by the published plugin)
+scripts/
+
+# Tests / fixtures
+test/
+tests/
+__tests__/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.log

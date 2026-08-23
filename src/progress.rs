@@ -129,6 +129,12 @@ pub fn set_stale_pid(pid: Option<u32>) {
     STATE.lock().unwrap().stale_pid = pid;
 }
 
+/// Read the stale-dsh PID (0 = none). Single source of truth — the launcher
+/// no longer keeps a parallel `AtomicU32` in `ui::state`.
+pub fn stale_pid() -> u32 {
+    STATE.lock().unwrap().stale_pid.unwrap_or(0)
+}
+
 /// Set the crash-recovery banner: dsh exited unexpectedly and will be
 /// auto-restarted after `countdown` seconds (unless the user cancels).
 pub fn set_crash(code: i32, countdown: u8) {

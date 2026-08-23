@@ -1,0 +1,45 @@
+{
+  "name": "@dshl/pipe",
+  "version": "0.1.0",
+  "description": "dshl pipe backend — a dsh plugin that connects to a running dshl launcher over the control pipe (DSHL_CONTROL_URL) and provides its capability set as the dshlPipeBackend Cordis service.",
+  "type": "module",
+  "main": "src/index.js",
+  "files": [
+    "src",
+    "cordis.patch.yml",
+    "LICENSE",
+    "README.md"
+  ],
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=4.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "MIT",
+  "author": "hibays",
+  "homepage": "https://github.com/hibays/dsh-launcher/tree/main/plugins/dshl-pipe",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hibays/dsh-launcher.git",
+    "directory": "plugins/dshl-pipe"
+  },
+  "bugs": {
+    "url": "https://github.com/hibays/dsh-launcher/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dshl",
+    "deepseek",
+    "harness",
+    "launcher",
+    "pipe",
+    "control",
+    "cordis"
+  ]
+}

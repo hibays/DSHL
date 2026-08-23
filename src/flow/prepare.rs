@@ -124,22 +124,42 @@ async fn probe_global(runtime: &Runtime) -> probe::Tool {
     }
 }
 
+/// Localized label for *which* dsh a decision log line talks about (the
+/// user's global one vs. dshl's cache install) — without it, hybrid-mode
+/// timelines read as two contradictory statements about one dsh.
+fn src_label(global: bool) -> String {
+    if global {
+        t!("flow.prepare.src_global").to_string()
+    } else {
+        t!("flow.prepare.src_cache").to_string()
+    }
+}
+
 /// Hybrid mode: use the global dsh when it satisfies `version`, else fall
 /// back to a cache install.
 async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> bool {
     let dsh = probe_global(runtime).await;
     if !dsh.found {
-        progress::log(t!("flow.prepare.not_installed"));
+        progress::log(t!(
+            "flow.prepare.not_installed",
+            source = t!("flow.prepare.src_global")
+        ));
         return false;
     }
+    let src = src_label(true);
     if !config.dsh.wants_latest() {
         // Pinned version: use the global only when it matches.
         if dsh_version_ok(&dsh, &config.dsh.version) {
-            progress::log(t!("flow.prepare.installed", installed = dsh.raw.trim()));
+            progress::log(t!(
+                "flow.prepare.installed",
+                source = src,
+                installed = dsh.raw.trim()
+            ));
             return true;
         }
         progress::log(t!(
             "flow.prepare.version_mismatch",
+            source = src,
             wanted = config.dsh.version,
             current = dsh.raw.trim()
         ));
@@ -148,7 +168,11 @@ async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> 
     if !config.dsh.auto_update || target == "latest" {
         // latest, but auto-update is off (or the latest could not be learned)
         // — keep the global as-is.
-        progress::log(t!("flow.prepare.installed", installed = dsh.raw.trim()));
+        progress::log(t!(
+            "flow.prepare.installed",
+            source = src,
+            installed = dsh.raw.trim()
+        ));
         return true;
     }
     // latest + auto-update: use the global only if it is already up to date;
@@ -158,6 +182,7 @@ async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> 
         (Some(installed), Some(latest)) if installed >= latest => {
             progress::log(t!(
                 "flow.prepare.up_to_date",
+                source = src,
                 installed = installed.to_string()
             ));
             true
@@ -165,6 +190,7 @@ async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> 
         _ => {
             progress::log(t!(
                 "flow.prepare.updating",
+                source = src,
                 current = dsh.raw.trim(),
                 latest = target.to_string()
             ));
@@ -196,14 +222,13 @@ fn dsh_pkg_dir() -> std::path::PathBuf {
         .join("dsh")
 }
 
-/// Is dsh already installed in the cache (its cli entry exists)?
-fn dsh_installed() -> bool {
-    package_entry(&dsh_pkg_dir()).is_some()
-}
-
 /// The `bin` entry of an npm package, read from its `package.json`. This is
-/// the file `node` runs (e.g. `cli.js`) — dsh is a node script, so launching
-/// it is just `node <entry>`; no shim, link or runner is needed.
+/// the file `node` runs (e.g. `lib/bin.js`) — dsh is a node script, so
+/// launching it is just `node <entry>`; no shim, link or runner is needed.
+///
+/// There is deliberately no fallback: a missing or malformed manifest must be
+/// an install failure, not a guess (a wrong guess used to spawn
+/// `node ...\node_modules\.bin\dsh.exe` and die with MODULE_NOT_FOUND).
 fn package_entry(pkg: &std::path::Path) -> Option<std::path::PathBuf> {
     let manifest = std::fs::read_to_string(pkg.join("package.json")).ok()?;
     let json: serde_json::Value = serde_json::from_str(&manifest).ok()?;
@@ -220,10 +245,37 @@ fn package_entry(pkg: &std::path::Path) -> Option<std::path::PathBuf> {
     path.is_file().then_some(path)
 }
 
+/// The version of the dsh package in the cache, read from its
+/// `package.json`. `None` when the cache holds no parseable dsh.
+fn cached_dsh_version(pkg: &std::path::Path) -> Option<FullVersion> {
+    let manifest = std::fs::read_to_string(pkg.join("package.json")).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&manifest).ok()?;
+    FullVersion::parse(json.get("version")?.as_str()?)
+}
+
+/// Should the cache install be refreshed to reach `target`?
+///
+/// Pure decision over (cached version, target spec) so it stays unit-testable:
+/// * target `latest`: any usable cache entry passes — the registry may have a
+///   newer release, but re-installing on every start would hit the network
+///   each launch; auto-update only moves the cache when the *global* probe
+///   already forced this code path.
+/// * pinned target: refresh unless the cached version equals it exactly.
+fn cache_needs_install(cached: Option<&FullVersion>, target: &str) -> bool {
+    match cached {
+        None => true, // nothing usable in the cache
+        Some(_) if target == "latest" || target.is_empty() => false,
+        Some(v) => match FullVersion::parse(target) {
+            // Can't parse the request; keep what we have rather than churn.
+            None => false,
+            Some(wanted) => *v != wanted,
+        },
+    }
+}
+
 /// Install `spec` into the cache dir (never `-g`, which would pollute the
 /// user's global `node_modules` / PATH). The install is local to the prefix,
-/// and the resulting package entry is picked up by [`dsh_installed`] /
-/// [`package_entry`].
+/// and the resulting package entry is picked up by [`package_entry`].
 async fn install_dsh(
     config: &Config,
     mirror: &MirrorConfig,
@@ -233,6 +285,29 @@ async fn install_dsh(
     let dir = dsh_dir();
     let pm = pm_name(config.dsh.pm);
     std::fs::create_dir_all(&dir).ok();
+
+    // Pin the install to the cache directory. Without a manifest here, bun and
+    // pnpm walk up looking for the nearest project root — dsh then lands in
+    // whatever package.json is above (observed: the user's home directory),
+    // and dshl's own cache stays empty.
+    let manifest = dir.join("package.json");
+    if !manifest.is_file() {
+        std::fs::write(
+            &manifest,
+            "{\n  \"name\": \"dshl-cache\",\n  \"private\": true,\n  \"dependencies\": {}\n}\n",
+        )
+        .map_err(|e| {
+            crate::error::Error(
+                t!(
+                    "flow.prepare.cache_manifest_failed",
+                    path = manifest.display().to_string(),
+                    err = e
+                )
+                .to_string(),
+            )
+        })?;
+    }
+
     progress::log(t!(
         "flow.prepare.installing",
         spec = spec,
@@ -359,7 +434,11 @@ pub async fn run(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> R
                     t!("flow.prepare.global_requires_dsh").to_string(),
                 ));
             }
-            progress::log(t!("flow.prepare.installed", installed = dsh.raw.trim()));
+            progress::log(t!(
+                "flow.prepare.installed",
+                source = t!("flow.prepare.src_global"),
+                installed = dsh.raw.trim()
+            ));
             true
         }
         DshMode::Hybrid => hybrid_use_global(config, &target, runtime).await,
@@ -375,13 +454,45 @@ pub async fn run(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> R
         c.args(&flags);
         c
     } else {
-        // Install into the cache (only when missing) and run
-        // `node <package-bin-entry>`.
-        if !dsh_installed() {
+        // Cache install: decide from the *cached package's* version (not just
+        // its presence) whether an install/update is needed, then run
+        // `node <package-bin-entry>`. The cache probe is logged either way,
+        // so the timeline shows the full global → cache decision chain.
+        let cached = cached_dsh_version(&dsh_pkg_dir());
+        let src = src_label(false);
+        if cache_needs_install(cached.as_ref(), &target) {
+            match cached {
+                Some(v) => progress::log(t!(
+                    "flow.prepare.version_mismatch",
+                    source = src,
+                    wanted = target,
+                    current = v.to_string()
+                )),
+                None => progress::log(t!(
+                    "flow.prepare.not_installed",
+                    source = t!("flow.prepare.src_cache")
+                )),
+            }
             install_dsh(config, mirror, runtime, &spec).await?;
+        } else if let Some(v) = cached {
+            // Cache hit: the installed copy already satisfies the target.
+            progress::log(t!(
+                "flow.prepare.installed",
+                source = src,
+                installed = v.to_string()
+            ));
         }
-        let entry = package_entry(&dsh_pkg_dir())
-            .unwrap_or_else(|| dsh_bin_dir().join(platform::with_ext("dsh")));
+        // Strict: after a successful install the entry must exist. A fallback
+        // guess here would spawn `node <something wrong>` downstream.
+        let entry = package_entry(&dsh_pkg_dir()).ok_or_else(|| {
+            crate::error::Error(
+                t!(
+                    "flow.prepare.entry_missing",
+                    dir = dsh_pkg_dir().display().to_string()
+                )
+                .to_string(),
+            )
+        })?;
         let node = platform::which_in("node", &runtime.path_prefix())
             .unwrap_or_else(|| platform::tool("node"));
         let mut c = Command::new(node);
@@ -475,5 +586,42 @@ mod tests {
         assert!(installed("0.1.0-rc.5").unwrap() < latest.clone().unwrap());
         assert!(installed("0.1.0-rc.6").unwrap() >= latest.clone().unwrap());
         assert!(installed("0.1.0").unwrap() > latest.unwrap());
+    }
+
+    #[test]
+    fn cache_needs_install_by_version() {
+        let v = |s: &str| FullVersion::parse(s);
+        // Nothing usable in the cache: always install.
+        assert!(cache_needs_install(None, "latest"));
+        assert!(cache_needs_install(None, "0.1.1-rc.2"));
+        // Latest (update info unavailable): keep a usable cache entry.
+        assert!(!cache_needs_install(v("0.1.0-rc.6").as_ref(), "latest"));
+        assert!(!cache_needs_install(v("0.1.0-rc.6").as_ref(), ""));
+        // Pinned target: exact match keeps, anything else refreshes.
+        assert!(!cache_needs_install(v("0.1.1-rc.2").as_ref(), "0.1.1-rc.2"));
+        assert!(cache_needs_install(v("0.1.0-rc.7").as_ref(), "0.1.1-rc.2"));
+        assert!(cache_needs_install(v("0.1.1-rc.1").as_ref(), "0.1.1-rc.2"));
+        // Unparseable request: don't churn the cache.
+        assert!(!cache_needs_install(v("0.1.0-rc.6").as_ref(), "garbage"));
+    }
+
+    #[test]
+    fn cached_dsh_version_reads_manifest() {
+        let dir = std::env::temp_dir().join(format!("dshl-test-cached-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let pkg = dir.join("@deepseek-ai").join("dsh");
+        std::fs::create_dir_all(&pkg).unwrap();
+        // No manifest yet.
+        assert_eq!(cached_dsh_version(&pkg), None);
+        std::fs::write(
+            pkg.join("package.json"),
+            r#"{"name":"@deepseek-ai/dsh","version":"0.1.1-rc.2"}"#,
+        )
+        .unwrap();
+        assert_eq!(cached_dsh_version(&pkg), FullVersion::parse("0.1.1-rc.2"));
+        // Garbage manifest → None (treated as "needs install").
+        std::fs::write(pkg.join("package.json"), "not json").unwrap();
+        assert_eq!(cached_dsh_version(&pkg), None);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

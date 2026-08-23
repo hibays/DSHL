@@ -57,7 +57,9 @@ mod tests {
             let mut cmd = Command::new("sh");
             cmd.args([
                 "-c",
-                "i=0; while [ $i -lt 500 ]; do echo line $i; i=$((i+1)); sleep 0.004; done",
+                // Pure shell builtins: no per-line fork (a forked `sleep`
+                // costs ~5-10ms under WSL/CI load and blew the 5s budget).
+                "i=0; while [ $i -lt 300 ]; do echo \"line $i\"; i=$((i+1)); done",
             ]);
             cmd
         }

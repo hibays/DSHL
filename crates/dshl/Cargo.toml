@@ -10,8 +10,7 @@ categories.workspace = true
 
 [dependencies]
 dshl-core = { path = "../.." }
-# SIGINT/SIGTERM handling so the launcher can clean up dsh on exit
-ctrlc = { version = "3", features = ["termination"] }
+dshl-cli = { path = "../dshl-cli" }
 
 # Embed the Windows .exe icon (resource) — see build.rs. This must be an
 # unconditional build-dependency: build scripts compile for the HOST, so the

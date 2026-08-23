@@ -6,7 +6,7 @@
 //! other's privates, only through these statics and the few accessor fns.
 
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{LazyLock, Mutex};
 
 /// webui window id of the current launcher window (0 until created).
@@ -27,10 +27,17 @@ pub(crate) static IS_BROWSER: AtomicBool = AtomicBool::new(false);
 pub(crate) static BROWSER_PID: AtomicUsize = AtomicUsize::new(0);
 /// True once the browser pid has been probed at least once (logging only).
 pub(crate) static BROWSER_CHECKED: AtomicBool = AtomicBool::new(false);
+/// Browser-mode close-detection latch (the `webui::is_shown` fallback used
+/// when the browser pid was never captured): true once the CURRENT window's
+/// browser WebSocket has been seen connected. Cleared when the window goes
+/// to the tray and on every re-creation, so a freshly restored browser must
+/// connect again before its disappearance counts as a real close — otherwise
+/// the stale latch would instantly re-enter "browser closed" right after a
+/// tray restore while the new browser is still connecting.
+pub(crate) static BROWSER_WAS_SHOWN: AtomicBool = AtomicBool::new(false);
 /// HWND of the embedded WebView window (0 until captured).
 pub(crate) static WEBVIEW_HWND: AtomicUsize = AtomicUsize::new(0);
-/// True once [`crate::ui::setup`] has finished creating and showing the
-/// window.
+/// True once [`super::setup`] has finished creating and showing the window.
 pub(crate) static SETUP_DONE: AtomicBool = AtomicBool::new(false);
 /// True when the user closed the window while it was still being created.
 pub(crate) static CLOSE_PENDING: AtomicBool = AtomicBool::new(false);
@@ -78,9 +85,59 @@ pub(crate) static CRASH_GEN: AtomicU32 = AtomicU32::new(0);
 /// `--config` CLI value (kept for the launch flow).
 pub(crate) static CLI_CONFIG_PATH: LazyLock<Mutex<Option<PathBuf>>> =
     LazyLock::new(|| Mutex::new(None));
+
+/// Snapshot the `--config` CLI/option path so callers outside this module
+/// (e.g. the napi `window_show` fallback that re-runs `setup`) can pass the
+/// same config on the second boot without stashing it elsewhere.
+pub(crate) fn cli_config_path() -> Option<PathBuf> {
+    CLI_CONFIG_PATH.lock().unwrap().clone()
+}
 /// Path of the dshl.toml actually loaded (for "open config" and the UI).
 pub(crate) static CONFIG_PATH: LazyLock<Mutex<Option<PathBuf>>> =
     LazyLock::new(|| Mutex::new(None));
-/// PID of a stale dsh that did not exit on Ctrl+C and is awaiting the user's
-/// explicit confirmation before being force-killed (0 = none).
-pub(crate) static STALE_PID: AtomicU32 = AtomicU32::new(0);
+
+/// True iff the kernel has finished the startup pipeline and the window is
+/// showing (or has navigated to) the real dsh URL. Exposed as a `pub` query
+/// so `ui` can re-export it via `pub use` (the `state` module itself is
+/// crate-private, so outside crates can only reach this through `ui::is_launched`).
+pub fn is_launched() -> bool {
+    LAUNCHED.load(Ordering::SeqCst)
+}
+
+/// Reset every "sticky" runtime flag (atomics + lazy paths) so a second
+/// kernel boot in the same process doesn't inherit stale state. Called by
+/// the shared entry point (dshl-cli) before each `ui::setup` — both tracks
+/// (bin + addon) share the same single global UI state, so the entry point
+/// owns the reset.
+///
+/// `CRASH_GEN` is intentionally **not** reset: it is monotonic so a stale
+/// countdown thread notices its own generation is superseded. `CONFIG_PATH`
+/// is not reset either: it is overwritten on the next `launch_flow`. The
+/// stale-dsh PID is no longer kept here — `progress::stale_pid()` is the
+/// single source of truth.
+pub fn reset_runtime_state() {
+    WINDOW_ID.store(0, Ordering::SeqCst);
+    SHOULD_EXIT.store(false, Ordering::SeqCst);
+    FLOW_RUNNING.store(false, Ordering::SeqCst);
+    LAUNCHED.store(false, Ordering::SeqCst);
+    SHUTDOWN_REQUESTED.store(false, Ordering::SeqCst);
+    IS_BROWSER.store(false, Ordering::SeqCst);
+    BROWSER_PID.store(0, Ordering::SeqCst);
+    BROWSER_CHECKED.store(false, Ordering::SeqCst);
+    BROWSER_WAS_SHOWN.store(false, Ordering::SeqCst);
+    WEBVIEW_HWND.store(0, Ordering::SeqCst);
+    SETUP_DONE.store(false, Ordering::SeqCst);
+    CLOSE_PENDING.store(false, Ordering::SeqCst);
+    TRAYED.store(false, Ordering::SeqCst);
+    RESTORING.store(false, Ordering::SeqCst);
+    PENDING_DESTROY.store(0, Ordering::SeqCst);
+    CRASH_CANCELLED.store(false, Ordering::SeqCst);
+    CRASH_RESTART_NOW.store(false, Ordering::SeqCst);
+    CRASH_NAVIGATE_PENDING.store(false, Ordering::SeqCst);
+    RESTART_REQUESTED.store(false, Ordering::SeqCst);
+    if let Some(keepalive) = KEEPALIVE.lock().unwrap().take() {
+        keepalive.stop();
+    }
+    *CLI_CONFIG_PATH.lock().unwrap() = None;
+    *LAUNCHER_URL.lock().unwrap() = String::new();
+}

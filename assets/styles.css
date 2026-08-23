@@ -46,8 +46,8 @@
   --hairline: #e5e5e2;
 
   --accent: #2f6fe4; /* ultramarine — fills: primary action, running, values */
-  --accent-strong: #2258c4; /* accent hover / press */
-  --accent-soft: #2457c4; /* accent tinted for text on the white ground */
+  --accent-strong: #2258c4; /* accent hover / press (deeper than accent) */
+  --accent-soft: #5685e0; /* accent tinted for text on the white ground (lighter than accent, distinct from strong) */
   --accent-faint: #c1d4f7; /* the running ring's faint phase on the white ground */
   --accent-ink: #ffffff;
 
@@ -169,7 +169,10 @@ header {
   text-transform: uppercase;
 }
 
-/* Status stamp — small uppercase note with a colour square. */
+/* Status stamp — small uppercase note with a colour square.
+ * data-status drives the colour (set by app.js): starting (default
+ * accent-soft), started (ok), crash/failed (err). Keeps colour in CSS
+ * instead of inline styles so theme switches don't fight specificity. */
 .status {
   display: flex;
   align-items: center;
@@ -181,6 +184,9 @@ header {
   color: var(--accent-soft);
   white-space: nowrap;
 }
+.status[data-status="started"] { color: var(--ok); }
+.status[data-status="crash"],
+.status[data-status="failed"] { color: var(--err); }
 
 .status::before {
   content: "";
@@ -195,7 +201,7 @@ body.running .status::before { animation: pulse 2s ease-in-out infinite; }
 
 /* ── Banners ────────────────────────────────────────────────────────── */
 
-.error,
+#error,
 .crash {
   margin: 28px 0 0;
   padding: 14px 16px;
@@ -262,65 +268,106 @@ main {
 /* Checkbox indicator — a double-layer square: pending shows two empty
  * layers, running lights the core, done fills with a check, error with a
  * cross, skipped dims. The rows read top-down in install order, so the
- * sequence needs no numerals. */
+ * sequence needs no numerals.
+ *
+ * GLYPH UNIFICATION
+ * All inner marks (pending core, running core, done check, error cross,
+ * skipped dot) share ONE positioning contract:
+ *   position: absolute; top: 50%; left: 50%;
+ *   transform: translate(-50%, -50%) [rotate(...) / scale(...)].
+ * This eliminates the drift that came from mixing grid-centred in-flow
+ * content (old done check) with absolute-centred content (old error cross).
+ * Strokes are always 2px and the mark's outer span is bounded by a notional
+ * 12×12 stage so the check and the cross sit inside identical envelopes. */
 .dot {
   position: relative;
   width: 18px;
   height: 18px;
-  display: grid;
-  place-items: center;
+  display: block;
   border: 1px solid var(--hairline);
 }
 
-.dot::before {
+/* GLYPH CENTRING CONTRACT — every ::before/::after on .dot shares the same
+ * absolute-centred position so marks never drift between states. Each state
+ * below only declares the shape/colour differences. */
+.dot::before,
+.dot::after {
   content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+/* Pending state: a hairline 8×8 square dead-centred in the 18×18 box. */
+.dot::before {
   width: 8px;
   height: 8px;
   border: 1px solid var(--muted);
 }
 
-/* The running step is alive — one modest swell: the core rises over the
- * first third of the cycle (0.9x → 1.5x, accent → faint), then eases back.
- * Its speed is 1.6x the log cursor's blink (cursor 1.1s → core ~0.69s). */
+/* Running: replace the hairline square with a swelling accent core. The
+ * keyframes re-declare transform so the centre holds during scale. */
 .dot.running { border-color: var(--accent); }
 .dot.running::before {
   border: none;
   background: var(--accent);
   animation: core 0.69s ease-in-out infinite;
 }
-
 @keyframes core {
-  0%, 100% { transform: scale(0.9); background-color: var(--accent); }
-  30%      { transform: scale(1.5); background-color: var(--accent-faint); }
+  0%, 100% { transform: translate(-50%, -50%) scale(0.9); background-color: var(--accent); }
+  30%      { transform: translate(-50%, -50%) scale(1.5); background-color: var(--accent-faint); }
 }
 
-.dot.done { background: var(--ok); border-color: var(--ok); }
+/* DONE — fill green, draw the checkmark with ::after. The pending ::before
+ * is erased (size 0, no border) so it never bleeds through.
+ * Check L-shape: 9×5 legs at 2px stroke, rotated -45°. Centred like every
+ * glyph (translate(-50%, -50%)) PLUS one deliberate 1px rise: rotating the
+ * asymmetric L leaves its bounding box ~1px low about the dot's centre
+ * (horizontally it stays symmetric), while the error cross needs no such
+ * correction — hence only the Y nudge here. */
+.dot.done   { --dot-fill: var(--ok); }
 .dot.done::before {
+  width: 0; height: 0; border: 0; background: transparent;
+}
+.dot.done::after {
   width: 9px;
   height: 5px;
-  border: none;
   border-left: 2px solid var(--fill-ink);
   border-bottom: 2px solid var(--fill-ink);
-  transform: rotate(-45deg) translate(-1px, -1px);
+  transform: translate(-50%, calc(-50% - 1px)) rotate(-45deg);
 }
 
-.dot.error { background: var(--err); border-color: var(--err); }
+/* ERROR — fill red, draw the X with two arms. Both arms share width=9px
+ * stroke=2px so the X's span matches the check's. */
+.dot.error  { --dot-fill: var(--err); }
 .dot.error::before,
 .dot.error::after {
-  position: absolute;
-  top: 50%;
-  left: 50%;
-  content: "";
-  width: 11px;
+  width: 9px;
   height: 2px;
-  border: none;
   background: var(--fill-ink);
+  border: 0;
 }
 .dot.error::before { transform: translate(-50%, -50%) rotate(45deg); }
-.dot.error::after { transform: translate(-50%, -50%) rotate(-45deg); }
+.dot.error::after  { transform: translate(-50%, -50%) rotate(-45deg); }
 
+/* Shared fill+border for done/error (the two "signal" states). */
+.dot.done,
+.dot.error {
+  background: var(--dot-fill);
+  border-color: var(--dot-fill);
+}
+
+/* SKIPPED — a muted filled square the same size as the pending hairline
+ * square, so all three idle states (pending / running / skipped) keep the
+ * same visual envelope around a 8×8 mark. */
 .dot.skipped { border-color: var(--hairline); }
-.dot.skipped::before { border: none; background: var(--hairline); }
+.dot.skipped::before {
+  border: none;
+  width: 8px;
+  height: 8px;
+  background: var(--hairline);
+}
 .dot.skipped + .step-body .step-title { text-decoration: line-through; }
 
 .step-body { min-width: 0; }
@@ -457,8 +504,9 @@ button.jump {
   border-color: var(--accent);
   color: var(--accent-ink);
 }
-button.jump:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
-button.jump:active { background: var(--accent-strong); transform: translateY(1px); }
+button.jump:hover,
+button.jump:active { background: var(--accent-strong); border-color: var(--accent-strong); }
+button.jump:active { transform: translateY(1px); }
 
 button.danger { border-color: var(--err); color: var(--err); }
 button.danger:hover {

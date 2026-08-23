@@ -1,0 +1,4 @@
+# @dshl/native bundle patch: registers the native backend plugin.
+- insert:
+    - id: dshl-native
+      name: '@dshl/native'

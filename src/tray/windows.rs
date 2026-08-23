@@ -411,6 +411,12 @@ pub fn open_url_requested() -> bool {
     OPEN_URL_REQUESTED.swap(false, Ordering::SeqCst)
 }
 
+/// True iff the tray is currently visible (message loop started AND an icon
+/// has been added to the shell notification area). Thread-safe.
+pub fn is_started() -> bool {
+    ICON_ACTIVE.load(Ordering::SeqCst) || TRAY_HWND.load(Ordering::SeqCst) != 0
+}
+
 /// Remove the icon and stop the message loop (on shutdown).
 pub fn shutdown() {
     remove_icon();
@@ -422,4 +428,12 @@ pub fn shutdown() {
             let _ = PostMessageW(Some(HWND(hwnd)), WM_TRAY_QUIT, WPARAM(0), LPARAM(0));
         }
     }
+    // Clear started flags so a subsequent `start()` can re-create the tray.
+    // Needed for the plugin-track cdylib where shutdown/start cycles can
+    // happen within the same Node process. CLASS_REGISTERED is intentionally
+    // not reset: window classes are process-global and Win32 returns FALSE
+    // (already registered) on a second attempt; start() uses OnceLock so it
+    // gracefully skips the second registration.
+    TRAY_HWND.store(0, Ordering::SeqCst);
+    ICON_ACTIVE.store(false, Ordering::SeqCst);
 }

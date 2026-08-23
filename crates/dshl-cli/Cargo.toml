@@ -1,0 +1,9 @@
+[package]
+name = "dshl-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+dshl-core = { path = "../.." }
+ctrlc = { version = "3", features = ["termination"] }

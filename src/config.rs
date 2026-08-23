@@ -73,7 +73,8 @@ pub struct Dsh {
     /// pnpm/bun: `npm` / `bun` / `pnpm`.
     pub pm: Pm,
     /// Version suffix for `@deepseek-ai/dsh`. `latest` (default) means no
-    /// suffix; anything else becomes `@deepseek-ai/dsh@<version>`.
+    /// suffix; anything else becomes `@deepseek-ai/dsh@<version>`. A pinned
+    /// version skips the registry check entirely (no network on start).
     pub version: String,
     /// Where dsh comes from: `global` / `hybrid` / `private` (see [`DshMode`]).
     pub mode: DshMode,
@@ -97,7 +98,7 @@ impl Default for Dsh {
     fn default() -> Self {
         Self {
             flags: "--profile web --host 127.0.0.1 --port 0".to_string(),
-            pm: Pm::Npm,
+            pm: Pm::Bun,
             version: "latest".to_string(),
             mode: DshMode::Hybrid,
             auto_update: true,

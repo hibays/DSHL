@@ -31,6 +31,10 @@ pub fn open_path(path: &Path) -> std::io::Result<()> {
 /// (the resolved dsh runtime dirs), so the terminal feels like the dsh
 /// environment: `dsh` / `node` / `bun` resolve without extra setup.
 ///
+/// NOTE: `path` is a **PATH prefix**, not the directory to cd into (that is
+/// `cwd`). When passing `None` be careful the argument order stays
+/// `(path, cwd)` — both are path-ish and easy to swap at callsites.
+///
 /// Detached: the launcher spawns it and never waits on the terminal process.
 pub fn open_terminal(path: Option<&std::ffi::OsStr>, cwd: &Path) -> std::io::Result<()> {
     #[cfg(target_os = "windows")]

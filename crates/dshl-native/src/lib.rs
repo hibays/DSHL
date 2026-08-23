@@ -1,196 +1,66 @@
-//! dshl-native — the plugin-track (Backend B) native addon.
+//! dshl-native — the plugin-track (Track B) native addon.
 //!
-//! Built with napi-rs into a per-platform `.node` dll that the `@dshl/control`
-//! plugin installs and calls directly. This is the dual-track counterpart to
-//! the launcher binary: Track A ships the full dshl app; this Track B addon
-//! hands the pure-JS plugin the same OS-level primitives (open-terminal,
-//! open-path, open-url, platform info) without needing a running dshl process.
+//! Built with napi-rs into a per-platform `.node` cdylib that the
+//! `@dshl/control` plugin installs and calls directly.
 //!
-//! Deliberately self-contained (std only): it must NOT link the webui C
-//! library, so the addon stays small and installable on machines that only run
-//! dsh plus the plugin. The command choices mirror dshl-core's
-//! `platform/actions.rs` and `platform/detect.rs` exactly so both tracks stay
-//! in sync.
+//! THIS DLL IS THE FULL KERNEL. It links against the same `dshl-core` rlib
+//! that the installer binary (`dshl.exe` / dshl.app / dshl.deb / PKGBUILD)
+//! uses, so it contains *every* capability of the launcher:
+//!
+//!   - the embedded startup webui window (webui.me WebView or external
+//!     browser, the exact same UI/assets/state machine),
+//!   - close-to-tray with a native system-tray icon,
+//!   - the full setup pipeline: runtime probing, mirror resolution, dsh
+//!     install/update/version pinning via bun/node/pnpm,
+//!   - the supervisor event loop + dsh graceful teardown,
+//!   - launcher-level single-instance,
+//!   - OS-level actions (open-terminal / open-path / open-url),
+//!   - restart / shutdown / switch-profile hooks,
+//!   - embedded PTY terminal backend (portable-pty + WebSocket).
+//!
+//! Track A (exe installer) and Track B (plugin cdylib) differ ONLY in how
+//! the kernel is entered:
+//!   Track A binary → dshl_cli::run_cli() (blocks the calling thread until
+//!                    the supervisor loop exits).
+//!   Track B addon  → launch(RunOptions) spawns the kernel on a background
+//!                    thread and returns a status handle; further #[napi]
+//!                    calls (windowShow, trayHide, shutdown, restart, …)
+//!                    drive the running kernel across threads.
+//!
+//! Both tracks share the same Rust source for every capability. The
+//! historical std-only mirror of open-terminal/... in this crate has been
+//! fully retired: the authoritative copies live in
+//! `dshl_core::platform::actions` and are called here directly.
+//!
+//! Module layout:
+//! - [`types`]: all `#[napi(object)]` struct definitions (mirrors of the
+//!   dshl_cli / dshl_core types — napi-derive needs its own types for TS-def
+//!   generation).
+//! - [`kernel`]: `launch` / `is_kernel_running` / `launch_status` + the
+//!   singleton `RUN_HANDLE` static.
+//! - [`window`]: window_show / hide / is_visible / navigate.
+//! - [`tray`]: tray_show / hide / set_icon / is_visible.
+//! - [`supervisor`]: shutdown / restart (+ detached-restart fallback).
+//! - [`platform`]: ping / platform_info / open_terminal / open_path / open_url.
+//! - [`pty`]: terminal_spawn / list / kill / resize / write / ws_endpoint.
 
-use std::path::Path;
-use std::process::{Command, Stdio};
+mod kernel;
+mod platform;
+mod pty;
+mod supervisor;
+mod tray;
+pub mod types;
+mod window;
 
-use napi_derive::napi;
-
-/// Options for opening a terminal: the working directory and an optional
-/// `PATH` to prepend so dsh / node / bun resolve inside the new terminal.
-#[napi(object)]
-pub struct OpenTerminalOptions {
-    pub cwd: String,
-    pub path: Option<String>,
-}
-
-/// Host platform facts, mirroring dshl-core's `platform/detect.rs`.
-#[napi(object)]
-pub struct PlatformInfo {
-    pub os: String,
-    pub arch: String,
-    pub shell: String,
-}
-
-/// Describe the host platform (os / arch / shell).
-#[napi]
-pub fn platform_info() -> PlatformInfo {
-    PlatformInfo {
-        os: os_name().to_string(),
-        arch: arch_name().to_string(),
-        shell: shell_name().to_string(),
-    }
-}
-
-/// Open a file or directory in the OS file manager / default viewer.
-///
-/// Mirrors dshl-core `platform::actions::open_path`.
-#[napi]
-pub fn open_path(path: String) -> bool {
-    let p = Path::new(&path);
-    match os() {
-        Os::Windows => {
-            if p.is_dir() {
-                let mut cmd = Command::new("explorer");
-                cmd.arg(p);
-                spawn(cmd)
-            } else {
-                let mut cmd = Command::new("explorer");
-                cmd.arg(format!("/select,{}", p.display()));
-                spawn(cmd)
-            }
-        }
-        Os::Macos => {
-            let mut cmd = Command::new("open");
-            cmd.arg(p);
-            spawn(cmd)
-        }
-        Os::Linux => {
-            let mut cmd = Command::new("xdg-open");
-            cmd.arg(p);
-            spawn(cmd)
-        }
-    }
-}
-
-/// Open a URL in the system default browser.
-///
-/// Mirrors dshl-core `platform::actions::open_url`.
-#[napi]
-pub fn open_url(url: String) -> bool {
-    match os() {
-        // `explorer.exe` would treat a URL as a path to select in a file
-        // manager, and `cmd /C start "" "<url>"` mangles the quoted URL. The
-        // `url.dll,FileProtocolHandler` verb is the canonical way to open a
-        // URL: it bypasses cmd entirely, so a `&` in a query string is never
-        // parsed as a command separator.
-        Os::Windows => {
-            let mut cmd = Command::new("rundll32");
-            cmd.args(["url.dll,FileProtocolHandler", &url]);
-            spawn(cmd)
-        }
-        Os::Macos => {
-            let mut cmd = Command::new("open");
-            cmd.arg(&url);
-            spawn(cmd)
-        }
-        Os::Linux => {
-            let mut cmd = Command::new("xdg-open");
-            cmd.arg(&url);
-            spawn(cmd)
-        }
-    }
-}
-
-/// Open a terminal window running in `cwd` with `path` prepended to `PATH`
-/// (the resolved dsh runtime dirs), so the terminal feels like the dsh
-/// environment. Detached: the caller spawns it and never waits on the process.
-///
-/// Mirrors dshl-core `platform::actions::open_terminal`.
-#[napi]
-pub fn open_terminal(options: OpenTerminalOptions) -> bool {
-    let cwd = Path::new(&options.cwd);
-    let path = options.path.as_deref().map(std::ffi::OsStr::new);
-    match os() {
-        // `cmd /C start` creates a NEW console for powershell and connects its
-        // standard handles to it, so the terminal owns its window; cmd gets
-        // nulled stdio and exits immediately. Same shape as dshl-core.
-        Os::Windows => {
-            let mut cmd = Command::new("cmd.exe");
-            cmd.args(["/C", "start", "", "powershell.exe", "-NoExit", "-NoLogo"]);
-            if let Some(p) = path {
-                cmd.env("PATH", p);
-            }
-            cmd.current_dir(cwd)
-                .stdin(Stdio::null())
-                .stdout(Stdio::null())
-                .stderr(Stdio::null());
-            spawn(cmd)
-        }
-        Os::Macos => {
-            let _ = path;
-            let mut cmd = Command::new("open");
-            cmd.args(["-a", "Terminal"]).arg(cwd);
-            spawn(cmd)
-        }
-        Os::Linux => {
-            for program in [
-                "x-terminal-emulator",
-                "gnome-terminal",
-                "konsole",
-                "xfce4-terminal",
-            ] {
-                let mut cmd = Command::new(program);
-                cmd.current_dir(cwd);
-                if let Some(p) = path {
-                    cmd.env("PATH", p);
-                }
-                if spawn(cmd) {
-                    return true;
-                }
-            }
-            false
-        }
-    }
-}
-
-fn spawn(mut cmd: Command) -> bool {
-    cmd.spawn().is_ok()
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Os {
-    Windows,
-    Linux,
-    Macos,
-}
-
-fn os() -> Os {
-    if cfg!(target_os = "windows") {
-        Os::Windows
-    } else if cfg!(target_os = "macos") {
-        Os::Macos
-    } else {
-        Os::Linux // best-effort: treat other unix-likes as linux
-    }
-}
-
-fn os_name() -> &'static str {
-    match os() {
-        Os::Windows => "windows",
-        Os::Linux => "linux",
-        Os::Macos => "macos",
-    }
-}
-
-fn arch_name() -> &'static str {
-    std::env::consts::ARCH
-}
-
-fn shell_name() -> &'static str {
-    match os() {
-        Os::Windows => "powershell",
-        Os::Macos | Os::Linux => "bash",
-    }
-}
+// Public napi surface — re-export every `#[napi]` function so napi-derive's
+// scan of `lib.rs` picks them up. (napi-derive walks the crate root, so every
+// exported symbol must be reachable from here.)
+pub use kernel::{is_kernel_running, launch, launch_status};
+pub use platform::{open_path, open_terminal, open_url, ping, platform_info};
+pub use pty::{
+    terminal_kill, terminal_list, terminal_resize, terminal_spawn, terminal_write,
+    terminal_ws_endpoint,
+};
+pub use supervisor::{restart, shutdown};
+pub use tray::{tray_hide, tray_is_visible, tray_set_icon, tray_show};
+pub use window::{window_hide, window_is_visible, window_navigate, window_show};

@@ -3,7 +3,7 @@ name = "dshl-native"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "dshl plugin-track native addon (napi-rs): open-terminal / open-path / open-url / platform info for the @dshl/control plugin."
+description = "dshl plugin-track native addon (napi-rs cdylib): the SAME full kernel (webui + tray + setup/flow/install + supervisor + OS actions) as the dshl installer binary, just loaded from Node via FFI instead of launched as an exe."
 repository.workspace = true
 keywords.workspace = true
 categories.workspace = true
@@ -15,5 +15,13 @@ crate-type = ["cdylib"]
 name = "dshl_native"
 
 [dependencies]
-napi = { version = "2", default-features = false, features = ["napi8"] }
-napi-derive = "2"
+napi = { version = "3", default-features = false, features = ["napi8"] }
+napi-derive = "3"
+# The whole dshl kernel — webui, tray, install pipeline, supervisor, platform
+# actions, locale, single-instance, control plane — compiles directly into
+# this cdylib. Uses a relative path so the workspace doesn't need a separate
+# `workspace.dependencies` section. Two tracks differ ONLY in entry point:
+#   Track A (installer exe) : crates/dshl/src/main.rs → dshl_cli::run_cli()
+#   Track B (plugin .node) : #[napi] launch(...) → dshl_cli::run_with_options(...)
+dshl-core = { path = "../.." }
+dshl-cli = { path = "../dshl-cli" }

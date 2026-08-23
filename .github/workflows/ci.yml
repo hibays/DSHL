@@ -1,0 +1,92 @@
+name: CI
+
+# Runs on every push (to main) and every pull request. Fast, cheap, catches
+# the most common regressions before a release tag is cut.
+#
+# Does NOT build per-platform installers or publish anything — that's the
+# job of release.yml / release-native.yml / release-plugins.yml.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+# A new push to the same branch cancels the superseded run — the gates are
+# cheap enough that rerunning stale commits is pure queue time.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # webui-rs is now a git source dependency (no prebuilt C library),
+        # so it compiles cleanly on every host including Windows ARM64.
+        # Run the full clippy + test suite on both linux-x64 (fast, cheap)
+        # and windows-11-arm (catches windows-arm-specific regressions that
+        # the linux runner would miss, e.g. windows-rs 0.62 arm64 feature
+        # gates or portable-pty ConPTY ARM64 quirks).
+        include:
+          - runner: ubuntu-latest
+            rust_target: x86_64-unknown-linux-gnu
+          - runner: windows-11-arm
+            rust_target: aarch64-pc-windows-msvc
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+          targets: ${{ matrix.rust_target }}
+
+      # The webui C library is compiled by a build script into target/ too,
+      # so caching target/ also skips the slow first-party C build.
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install Linux system deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libgtk-3-dev \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-bin
+
+      # Gate logic lives in scripts/gate.ps1|gate.sh — the same scripts local
+      # developers run, so CI and local never drift apart.
+      - name: Rust gates (fmt + clippy + test)
+        run: bash scripts/gate.sh --rust
+        if: runner.os == 'Linux'
+
+      - name: Rust gates (fmt + clippy + test)
+        run: ./scripts/gate.ps1 -Rust
+        shell: pwsh
+        if: runner.os == 'Windows'
+
+  js:
+    name: JS plugin syntax + npm pack
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install workspace (links @dshl/* siblings)
+        run: npm install
+
+      # Single source for the file list: package.json "check" — invoked by
+      # scripts/gate.sh, the same script local developers run.
+      - name: JS gates (syntax check + pack dry-run)
+        run: bash scripts/gate.sh --js

@@ -38,13 +38,6 @@ function applyDataI18n() {
   }
 }
 
-const STATUS_TEXT = {
-  pending: tr("page.status.pending"),
-  running: tr("page.status.running"),
-  done: tr("page.status.done"),
-  error: tr("page.status.error"),
-  skipped: tr("page.status.skipped"),
-};
 const DOT_CLASS = { pending: "", running: "running", done: "done", error: "error", skipped: "skipped" };
 
 // The dsh web URL as last reported by the backend (set once dsh is up).
@@ -75,9 +68,8 @@ function renderSteps(steps) {
       ol.appendChild(li);
     }
     const s = steps[i];
-    const cls = DOT_CLASS[s.status] || "";
     const dot = li.querySelector(".dot");
-    const wanted = cls ? `dot ${cls}` : "dot";
+    const wanted = `dot ${DOT_CLASS[s.status] || ""}`.trim();
     if (dot.className !== wanted) dot.className = wanted;
     const title = li.querySelector(".step-title");
     const msg = li.querySelector(".step-msg");
@@ -89,7 +81,9 @@ function renderSteps(steps) {
 }
 
 function renderConfig(state) {
-  $("config-path").textContent = state.config_path ? `(${state.config_path})` : "";
+  const pathEl = $("config-path");
+  const pathWanted = state.config_path ? `(${state.config_path})` : "";
+  if (pathEl.textContent !== pathWanted) pathEl.textContent = pathWanted;
   const ce = $("config-error");
   if (state.config_error) {
     ce.hidden = false;
@@ -117,38 +111,63 @@ function renderConfig(state) {
   } catch (e) {
     parseError = true;
   }
+
   if (parseError) {
+    // Unparseable config: show the raw text as-is. textContent comparison
+    // covers both single-textNode and element-children layouts (k/v rows),
+    // so the node-type check is no longer needed.
     const raw = state.config_json || "";
-    // Unparseable config: show the raw text as-is (full replace is fine here —
-    // this is a stable error state, not a per-poll rebuild).
-    const first = view.firstChild;
-    if (!(first && first.nodeType === 3 && first.textContent === raw)) {
-      view.textContent = raw;
-    }
+    if (view.textContent !== raw) view.textContent = raw;
     return;
   }
-  // Incremental render: keep the existing k/v rows, updating only the text
-  // that changed and adding/removing rows to match the count. The rows are
-  // alternating div.k / div.v children, so row i lives at children[2i], [2i+1].
-  const needed = rows.length * 2;
-  while (view.childNodes.length > needed) view.lastChild.remove();
+
+  // Incremental rebuild with a single key→{k,v} map. The existing rows are
+  // indexed by their key text, so:
+  //   * keys whose order changed are re-shuffled in the DOM,
+  //   * new keys are inserted in the right position,
+  //   * vanished keys are removed,
+  //   * unchanged keys keep their existing DOM nodes (no flicker).
+  const kEls = view.querySelectorAll(":scope > .k");
+  const vEls = view.querySelectorAll(":scope > .v");
+  // If the container holds ANY other children — including the single text
+  // node a parseError pass leaves behind (textContent = raw) — wipe and
+  // start clean. childElementCount cannot see text nodes; childNodes can.
+  if (kEls.length !== vEls.length || kEls.length * 2 !== view.childNodes.length) {
+    view.textContent = "";
+    kEls.length = vEls.length = 0;
+  }
+  const existing = new Map();  // key → { k: HTMLElement, v: HTMLElement }
+  for (let i = 0; i < kEls.length; i++) {
+    existing.set(kEls[i].textContent, { k: kEls[i], v: vEls[i] });
+  }
+
+  const wantedKeys = new Set();
   for (let i = 0; i < rows.length; i++) {
-    const k = rows[i][0];
-    const v = rows[i][1] === undefined || rows[i][1] === null ? "" : String(rows[i][1]);
-    let kEl = view.childNodes[i * 2];
-    if (!kEl) {
-      kEl = document.createElement("div");
-      kEl.className = "k";
-      view.appendChild(kEl);
+    const [k, rawVal] = rows[i];
+    const v = rawVal == null ? "" : String(rawVal);
+    wantedKeys.add(k);
+    let pair = existing.get(k);
+    if (!pair) {
+      pair = {
+        k: Object.assign(document.createElement("div"), { className: "k", textContent: k }),
+        v: Object.assign(document.createElement("div"), { className: "v", textContent: v }),
+      };
+      existing.set(k, pair);
+    } else {
+      if (pair.k.textContent !== k) pair.k.textContent = k;
+      if (pair.v.textContent !== v) pair.v.textContent = v;
     }
-    if (kEl.textContent !== k) kEl.textContent = k;
-    let vEl = view.childNodes[i * 2 + 1];
-    if (!vEl) {
-      vEl = document.createElement("div");
-      vEl.className = "v";
-      view.appendChild(vEl);
+    // Append/move the pair to the end so DOM order matches rows order.
+    view.appendChild(pair.k);
+    view.appendChild(pair.v);
+  }
+
+  // Remove orphan pairs whose key wasn't in rows.
+  for (const [key, pair] of existing) {
+    if (!wantedKeys.has(key)) {
+      pair.k.remove();
+      pair.v.remove();
     }
-    if (vEl.textContent !== v) vEl.textContent = v;
   }
 }
 
@@ -162,17 +181,23 @@ let logRendered = 0;
 
 function renderLog(lines) {
   const el = $("log");
-  if (logRendered > 0 && lines.length >= logRendered) {
-    if (lines.length > logRendered) {
-      el.textContent += "\n" + lines.slice(logRendered).join("\n");
-      logRendered = lines.length;
-    }
-    // unchanged — leave the DOM alone
-  } else {
-    // First render, or the backend truncated the log — rebuild from scratch.
+  const firstRender = logRendered === 0;
+  const backendTruncated = lines.length < logRendered;
+  if (firstRender || backendTruncated) {
+    // First paint OR the backend truncated the array: full rebuild is the
+    // only honest way to reflect the new contents.
     el.textContent = lines.join("\n");
-    logRendered = lines.length;
+  } else if (lines.length > logRendered) {
+    // Append delta as a text node so the browser doesn't destroy the existing
+    // text (which would clear any user selection inside the log panel and
+    // restart the blinking cursor animation on every poll).
+    if (logRendered > 0) {
+      el.appendChild(document.createTextNode("\n"));
+    }
+    el.appendChild(document.createTextNode(lines.slice(logRendered).join("\n")));
   }
+  // else: lines.length === logRendered — nothing to do, leave DOM alone.
+  logRendered = lines.length;
   if (logPinned) el.scrollTop = el.scrollHeight;
 }
 
@@ -218,19 +243,20 @@ function renderStatus(state) {
   const starting =
     !(state.crash && state.crash.countdown > 0) && !state.url && !state.error;
   document.body.classList.toggle("running", starting);
-  // During crash recovery there is no running dsh — don't claim otherwise.
+  // data-status drives the badge colour via CSS (see styles.css .status[]),
+  // so theme switches never fight inline-style specificity.
   if (state.crash && state.crash.countdown > 0) {
     badge.textContent = tr("page.badge.crash");
-    badge.style.color = "var(--err)";
+    badge.dataset.status = "crash";
   } else if (state.url) {
     badge.textContent = tr("page.badge.started");
-    badge.style.color = "var(--ok)";
+    badge.dataset.status = "started";
   } else if (state.error) {
     badge.textContent = tr("page.badge.failed");
-    badge.style.color = "var(--err)";
+    badge.dataset.status = "failed";
   } else {
     badge.textContent = tr("page.badge.starting");
-    badge.style.color = "var(--accent-soft)";
+    badge.dataset.status = "starting";
   }
 }
 
@@ -267,14 +293,6 @@ function open_dsh() {
   if (dshUrl) {
     location.assign(dshUrl);
   }
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
 }
 
 async function poll() {

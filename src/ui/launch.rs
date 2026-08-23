@@ -77,7 +77,6 @@ pub fn launch_flow() {
         if let Some(child) = crate::DSH_CHILD.lock().unwrap().take() {
             if !runtime::block_on(child.graceful_kill(10_000)) {
                 let pid = child.pid().unwrap_or(0);
-                state::STALE_PID.store(pid, Ordering::SeqCst);
                 progress::set_stale_pid(Some(pid));
                 progress::set_error(t!("ui.launch.stale_no_exit", pid = pid));
                 state::FLOW_RUNNING.store(false, Ordering::SeqCst);
@@ -110,7 +109,50 @@ pub fn launch_flow() {
             return;
         }
 
-        match runtime::block_on(flow::run(&loaded.config, &mirror)) {
+        // Run the startup pipeline, but abort it as soon as a shutdown is
+        // requested: `flow::run` itself is not interruptible (it installs,
+        // spawns and waits on subprocesses), so race it against a 100ms poll
+        // of SHUTDOWN_REQUESTED inside one `block_on(tokio::select!)`.
+        //
+        // When the flag wins, dropping the `flow::run` future cancels whatever
+        // step it was in the middle of — but a dsh it already spawned is NOT
+        // lost: the spawn registers an Arc of the AsyncChild in
+        // `crate::DSH_CHILD` immediately, so the handle survives the drop and
+        // the child can be reaped gracefully below instead of being orphaned.
+        let outcome = runtime::block_on(async {
+            tokio::select! {
+                result = flow::run(&loaded.config, &mirror) => Some(result),
+                _ = async {
+                    loop {
+                        if state::SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+                            return;
+                        }
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                } => None,
+            }
+        });
+
+        let Some(result) = outcome else {
+            // Shutdown interrupted the pipeline. Reap any dsh that was already
+            // spawned (see above) — nobody else will: `exit::shutdown`'s
+            // kill_dsh() either ran before the spawn or finds the slot empty.
+            // The 10s timeout matches the stale-dsh cleanup; don't drag the
+            // exit out with the 30s used by the supervised-phase kill_dsh().
+            if let Some(child) = crate::DSH_CHILD.lock().unwrap().take() {
+                let pid = child.pid().unwrap_or(0);
+                crate::debug::emit(&format!(
+                    "shutdown during launch; flow aborted, stopping dsh (pid {pid})"
+                ));
+                runtime::block_on(child.graceful_kill(10_000));
+            } else {
+                crate::debug::emit("shutdown during launch; flow aborted (dsh not yet spawned)");
+            }
+            state::FLOW_RUNNING.store(false, Ordering::SeqCst);
+            return;
+        };
+
+        match result {
             Ok(launch) => {
                 if state::SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
                     // The window was closed while dsh was starting. Don't
@@ -120,7 +162,7 @@ pub fn launch_flow() {
                     crate::debug::emit("shutdown requested during launch; skipping navigate");
                 } else {
                     // Route the window to dsh and hand off to supervisor mode.
-                    window::navigate(&launch.url);
+                    window::navigate_when_connected(&launch.url);
                     state::LAUNCHED.store(true, Ordering::SeqCst);
 
                     // In WebView mode, track the window handle so the

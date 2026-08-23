@@ -46,13 +46,16 @@ mod windows;
 
 #[cfg(target_os = "linux")]
 pub use linux::{
-    hide_to_tray, open_url_requested, quit_requested, restore_requested, set_icon, shutdown, start,
+    hide_to_tray, is_started, open_url_requested, quit_requested, restore_requested, set_icon,
+    shutdown, start,
 };
 #[cfg(target_os = "macos")]
 pub use macos::{
-    hide_to_tray, open_url_requested, quit_requested, restore_requested, set_icon, shutdown, start,
+    hide_to_tray, is_started, open_url_requested, quit_requested, restore_requested, set_icon,
+    shutdown, start,
 };
 #[cfg(target_os = "windows")]
 pub use windows::{
-    hide_to_tray, open_url_requested, quit_requested, restore_requested, set_icon, shutdown, start,
+    hide_to_tray, is_started, open_url_requested, quit_requested, restore_requested, set_icon,
+    shutdown, start,
 };

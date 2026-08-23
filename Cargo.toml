@@ -11,7 +11,7 @@ categories.workspace = true
 
 [workspace]
 resolver = "3"
-members = [".", "crates/dshl", "crates/dshl-native"]
+members = [".", "crates/dshl", "crates/dshl-native", "crates/dshl-cli"]
 
 [workspace.package]
 version = "0.2.0"
@@ -40,7 +40,7 @@ regex = "1"
 # WebSocket handshake key encoding (keep-alive client)
 base64 = "0.23"
 # Async runtime — minimal tokio: only the features actually used (process I/O,
-# timers, the keep-alive socket, fs handle conversion and the multi-thread rt).
+# timers, the keep-alive socket and the multi-thread rt).
 tokio = { version = "1", features = [
     "rt-multi-thread",
     "macros",
@@ -49,13 +49,19 @@ tokio = { version = "1", features = [
     "io-util",
     "sync",
     "net",
-    "fs",
 ] }
 # i18n: translations embedded at compile time (t! macro), runtime set_locale.
 rust-i18n = "4"
 # OS UI-language detection (used to pick the default locale at startup).
 sys-locale = "0.3"
-
+# Cross-platform PTY backend (ConPTY on Windows, openpty/forkpty on unix)
+# used by the in-browser embedded terminal (xterm.js + WebSocket). Also pulls
+# tokio-tungstenite for a standalone WS server inside dshl-core (no dependency
+# on Cordis / dsh webServer exposing ws).
+portable-pty = "0.9"
+tokio-tungstenite = { version = "0.30", default-features = false, features = ["handshake"] }
+futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
+uuid = { version = "1", features = ["v4", "serde"] }
 # setsid() for detaching the dsh child on unix (thin FFI, not a runtime)
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"

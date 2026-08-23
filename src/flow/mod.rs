@@ -67,7 +67,12 @@ pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Launch> {
     run_step!("mirror", mirror_check::run(mirror));
     let command = run_step!("dsh", prepare::run(config, mirror, &runtime));
 
-    let launch = launch::run(command).await?;
+    // The launch step MUST go through `run_step!` like every other step: its
+    // errors (dsh exited without printing a URL, spawn failure, …) have to
+    // mark the step as failed and surface in the UI. A bare `?` here let the
+    // error escape silently — the worker just returned, the page stayed on
+    // "启动 dsh…" forever and nothing ever told the user why.
+    let launch = run_step!("launch", launch::run(command));
 
     Ok(launch)
 }

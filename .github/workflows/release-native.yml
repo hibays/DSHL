@@ -1,0 +1,176 @@
+name: Release (Track B — native .node)
+
+# Track B: per-platform napi-rs .node cdylib artifacts published as the six
+# `@dshl/native-<platform>-<arch>` subpackages on npm.
+#
+# Each matrix leg builds the dshl-native DLL for one Rust target, stages it
+# as `@dshl/native-<platform>-<arch>` with a tiny package.json, and publishes
+# to npm. The aggregator package `@dshl/native` (which lists all six as
+# optionalDependencies) is published separately by release-plugins.yml once
+# all six legs are green.
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  # Same-tag re-run replaces the in-flight one; different tags never clash.
+  group: release-native-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  id-token: write  # npm provenance (npm publish --provenance)
+
+jobs:
+  build-and-publish:
+    name: Build ${{ matrix.subpackage }}
+    runs-on: ${{ matrix.os }}
+    environment: npm-publish
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # --- Windows ---
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            subpackage: '@dshl/native-win32-x64-msvc'
+            npm_tag: win32-x64-msvc
+            artifact_name: dshl-native.win32-x64.node
+            lib_name: dshl_native.dll
+            os_part: win32
+            cpu_part: x64
+          # Native ARM64 runner — matches Track A's verified chain instead of
+          # cross-compiling ARM64 on an x64 host (cc-rs/webui risk).
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            subpackage: '@dshl/native-win32-arm64-msvc'
+            npm_tag: win32-arm64-msvc
+            artifact_name: dshl-native.win32-arm64.node
+            lib_name: dshl_native.dll
+            os_part: win32
+            cpu_part: arm64
+          # --- macOS (universal runners; cross-compile between x86_64/arm64) ---
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            subpackage: '@dshl/native-darwin-x64'
+            npm_tag: darwin-x64
+            artifact_name: dshl-native.darwin-x64.node
+            lib_name: libdshl_native.dylib
+            os_part: darwin
+            cpu_part: x64
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            subpackage: '@dshl/native-darwin-arm64'
+            npm_tag: darwin-arm64
+            artifact_name: dshl-native.darwin-arm64.node
+            lib_name: libdshl_native.dylib
+            os_part: darwin
+            cpu_part: arm64
+          # --- Linux ---
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            subpackage: '@dshl/native-linux-x64-gnu'
+            npm_tag: linux-x64-gnu
+            artifact_name: dshl-native.linux-x64.node
+            lib_name: libdshl_native.so
+            os_part: linux
+            cpu_part: x64
+          - os: ubuntu-latest
+            target: aarch64-unknown-linux-gnu
+            subpackage: '@dshl/native-linux-arm64-gnu'
+            npm_tag: linux-arm64-gnu
+            artifact_name: dshl-native.linux-arm64.node
+            lib_name: libdshl_native.so
+            os_part: linux
+            cpu_part: arm64
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install aarch64-linux cross toolchain
+        if: matrix.target == 'aarch64-unknown-linux-gnu'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y gcc-aarch64-linux-gnu
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          # dshl-native links the FULL kernel, so webui's C library is also
+          # cross-compiled: cc-rs needs an explicit cross compiler, not just a
+          # linker, or the build dies with "aarch64-unknown-linux-gnu-gcc: not
+          # found" (latent until the first linux-arm64 tag).
+          echo "CC_AARCH64_UNKNOWN_LINUX_GNU=aarch64-linux-gnu-gcc" >> "$GITHUB_ENV"
+          echo "AR_AARCH64_UNKNOWN_LINUX_GNU=aarch64-linux-gnu-ar" >> "$GITHUB_ENV"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Resolve version
+        shell: bash
+        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+
+      - name: Build dshl-native cdylib
+        run: cargo build --release --locked --target ${{ matrix.target }} -p dshl-native
+
+      - name: Stage .node + generate subpackage package.json
+        shell: bash
+        run: |
+          set -euo pipefail
+          STAGE="stage/${{ matrix.npm_tag }}"
+          mkdir -p "$STAGE"
+          cp "target/${{ matrix.target }}/release/${{ matrix.lib_name }}" \
+             "$STAGE/${{ matrix.artifact_name }}"
+          # Rename the artifact to a canonical `index.node` so the subpackage's
+          # `main` resolves without per-platform conditionals.
+          mv "$STAGE/${{ matrix.artifact_name }}" "$STAGE/index.node"
+          cat > "$STAGE/package.json" <<JSON
+          {
+            "name": "${{ matrix.subpackage }}",
+            "version": "$VERSION",
+            "description": "Prebuilt dshl-native napi-rs addon for ${{ matrix.npm_tag }} (built from the dshl-launcher monorepo at tag ${{ github.ref_name }}).",
+            "type": "module",
+            "main": "index.node",
+            "files": ["index.node"],
+            "os": ["${{ matrix.os_part }}"],
+            "cpu": ["${{ matrix.cpu_part }}"],
+            "engines": { "node": ">=22" },
+            "license": "MIT",
+            "author": "hibays",
+            "homepage": "https://github.com/hibays/dsh-launcher/tree/main/plugins/dshl-native",
+            "repository": {
+              "type": "git",
+              "url": "git+https://github.com/hibays/dsh-launcher.git",
+              "directory": "plugins/dshl-native"
+            },
+            "bugs": { "url": "https://github.com/hibays/dsh-launcher/issues" },
+            "keywords": ["dsh","dshl","napi-rs","addon","${{ matrix.npm_tag }}"]
+          }
+          JSON
+          # Copy LICENSE into the stage so the published tarball carries it.
+          cp plugins/dshl-native/LICENSE "$STAGE/LICENSE"
+          cp plugins/dshl-native/README.md "$STAGE/README.md"
+
+      - name: Publish subpackage to npm
+        shell: bash
+        working-directory: stage/${{ matrix.npm_tag }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          if [ -z "${NODE_AUTH_TOKEN:-}" ]; then
+            echo "::notice::NPM_TOKEN not configured - skipping npm publish (no-op, not an error)"
+            exit 0
+          fi
+          npm publish --access public --provenance
+          echo "published ${{ matrix.subpackage }}@$VERSION"

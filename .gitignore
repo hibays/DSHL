@@ -1,6 +1,9 @@
 /target
 # local napi addon builds beside the plugin (produced by build-native.mjs)
-/plugins/dshl-control/native/
+/plugins/dshl-native/native/
+# npm workspace install output
+/node_modules/
+/package-lock.json
 # webui prebuilt static library downloaded by its build script
 webui-2-static.lib
 libwebui-2-static.a

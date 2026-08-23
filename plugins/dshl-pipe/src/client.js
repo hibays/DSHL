@@ -1,29 +1,33 @@
+// @dshl/pipe — control pipe client (legacy remote launcher backend).
+//
+// A tiny newline-delimited JSON client for the dshl control pipe. The
+// endpoint URL format is `dshl://<token>@<host>:<port>`.
+//
+// One socket at a time; a dropped connection rejects in-flight requests and
+// the next `request()` reconnects (the server authenticates each new socket
+// with the hello handshake).
 import { connect } from 'node:net'
 
-// Parse a `dshl://<token>@<host>:<port>` control endpoint.
 function parseEndpoint(url) {
   if (typeof url !== 'string' || url.length === 0) throw new Error('missing endpoint')
   const rest = url.startsWith('dshl://') ? url.slice('dshl://'.length) : url
   const at = rest.lastIndexOf('@')
   const colon = rest.lastIndexOf(':')
-  if (at === -1 || colon <= at) throw new Error(`invalid endpoint: ${url}`)
+  // Reason-only messages: the raw URL embeds the control bearer token, and
+  // this class is exported — a caller that logs the error would leak it to
+  // disk. Shape (`dshl://<token>@host:port`) is documented, so the cause is
+  // recoverable without echoing the secret.
+  if (at === -1 || colon <= at) throw new Error('invalid endpoint: expected dshl://<token>@host:port')
   const token = rest.slice(0, at)
   const host = rest.slice(at + 1, colon)
   const port = Number(rest.slice(colon + 1))
-  if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error(`invalid endpoint: ${url}`)
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) throw new Error('invalid endpoint: port out of range')
   return { token, host, port }
 }
 
 const REQUEST_TIMEOUT_MS = 15_000
 const CONNECT_TIMEOUT_MS = 5_000
 
-/**
- * A tiny newline-delimited JSON client for the dshl control pipe.
- *
- * One socket at a time; a dropped connection rejects in-flight requests and
- * the next `request()` reconnects (the server authenticates each new socket
- * with the hello handshake).
- */
 export class ControlClient {
   #token
   #host
@@ -46,7 +50,6 @@ export class ControlClient {
     return this.#socket !== null
   }
 
-  /** Send one request and await its response (reconnecting as needed). */
   async request(method, params = {}) {
     const socket = await this.#ensure()
     const id = this.#nextId++

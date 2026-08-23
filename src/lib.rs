@@ -39,7 +39,11 @@ pub mod platform;
 pub mod probe;
 pub mod process;
 pub mod progress;
+
+pub mod pty;
 pub mod runtime;
+#[cfg(test)]
+mod testutil;
 pub mod tray;
 pub mod ui;
 pub mod version;

@@ -1,0 +1,12 @@
+# Development-only files never published to npm.
+# (package.json `files` is the whitelist; this is belt-and-suspenders.)
+
+# Tests / fixtures
+test/
+tests/
+__tests__/
+
+# Editor / OS noise
+.DS_Store
+Thumbs.db
+*.log

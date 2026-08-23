@@ -1,0 +1,4 @@
+# @dshl/pipe bundle patch: registers the pipe backend plugin.
+- insert:
+    - id: dshl-pipe
+      name: '@dshl/pipe'
