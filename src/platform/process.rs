@@ -100,19 +100,30 @@ fn win_alive(pid: u32) -> bool {
 
 /// Find a process whose command line contains `needle`, returning its pid.
 ///
-/// Used to track the external browser window webui launched (its command line
-/// carries `--app=http://localhost:<port>`), so we can detect when the user
-/// closes it. Prefer this over webui's own `get_child_process_id`, which
-/// relies on the now-removed `wmic`.
+/// Used to track the external browser window webui launched, so we can detect
+/// when the user closes it. Two needle shapes call this:
+/// * `localhost:<port>` — the launch command line carries
+///   `--app=http://localhost:<port>`; reliable while the browser process
+///   still holds its original command line.
+/// * the webui profile dir (`.WebUI`) — fallback for browsers that forward
+///   the launch to an already-running process and drop the app flags (Edge
+///   startup boost): the profile's MAIN browser process keeps
+///   `--user-data-dir=...\.WebUI\...` for the process lifetime. Helper
+///   processes (`--type=…`) are excluded so the match is the browser itself.
+///
+/// Prefer this over webui's own `get_child_process_id`, which relies on the
+/// now-removed `wmic`.
 pub fn find_process_by_cmdline(needle: &str) -> Option<u32> {
     #[cfg(target_os = "windows")]
     {
-        // Restrict to browser binaries so the query never matches its own
-        // PowerShell/cmd wrapper (whose command line also contains `needle`).
+        // `-notmatch '--type='` skips renderer/gpu/crashpad helpers, whose
+        // command lines can also carry the profile dir or the port.
         let script = format!(
             "(Get-CimInstance Win32_Process | Where-Object {{ \
              $_.Name -match 'msedge|chrome|firefox|chromium|brave|vivaldi|opera|yandex|epic' -and \
-             $_.CommandLine -and $_.CommandLine -match [regex]::Escape('{needle}') }} | \
+             $_.CommandLine -and \
+             $_.CommandLine -notmatch '--type=' -and \
+             $_.CommandLine -match [regex]::Escape('{needle}') }} | \
              Select-Object -First 1).ProcessId"
         );
         let mut cmd = Command::new("powershell");

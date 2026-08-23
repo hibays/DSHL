@@ -20,12 +20,23 @@ use std::time::{Duration, Instant};
 
 use crate::platform;
 
-const CAPTURE_ATTEMPTS_LIMIT: u32 = 8;
+/// Capture retries: one attempt every [`CAPTURE_RETRY_INTERVAL`], so the
+/// budget spans ~80 s — an external browser can take several seconds to
+/// cold-start (AV scan, profile lock, loaded machine), and the capture must
+/// still be pending when its window finally appears.
+const CAPTURE_ATTEMPTS_LIMIT: u32 = 40;
 const CAPTURE_RETRY_INTERVAL: Duration = Duration::from_secs(2);
 
 static PID: AtomicUsize = AtomicUsize::new(0);
 static CHECKED: AtomicBool = AtomicBool::new(false);
 static WAS_SHOWN: AtomicBool = AtomicBool::new(false);
+/// True once the CURRENT window was navigated away from the launcher page to
+/// the dsh URL. After that navigation the browser's webui socket is gone for
+/// good (the dsh page does not speak the webui protocol), so `is_shown`
+/// reads false forever and the was_shown latch would classify the LIVE
+/// browser as closed. Close detection for a navigated window relies on the
+/// pid alone; the latch only guards the pre-navigation window.
+static NAVIGATED_TO_DSH: AtomicBool = AtomicBool::new(false);
 static CAPTURE_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
 static LAST_CAPTURE: Mutex<Option<Instant>> = Mutex::new(None);
 
@@ -84,6 +95,7 @@ pub(crate) fn reset_runtime_state() {
 pub(crate) fn note_window_recreated() {
     CHECKED.store(false, Ordering::SeqCst);
     WAS_SHOWN.store(false, Ordering::SeqCst);
+    NAVIGATED_TO_DSH.store(false, Ordering::SeqCst);
     CAPTURE_ATTEMPTS.store(0, Ordering::SeqCst);
 }
 
@@ -92,17 +104,25 @@ pub(crate) fn set_pid(pid: usize) {
     PID.store(pid, Ordering::SeqCst);
 }
 
-/// Forget the pid (close-to-tray transitions); latch re-arms via
-/// [`note_window_recreated`] on the next restore.
-/// Close-to-tray transition: forget the pid and re-arm the latch/budget.
-/// (Supervisor keeps PENDING_DESTROY/TRAYED side effects on its side.)
+/// Close-to-tray transition: forget the pid and clear every latch so the
+/// next window starts detection from scratch. Clearing WAS_SHOWN here is
+/// what stops a detected close from re-firing on every subsequent tick
+/// after the window has already been freed.
 pub(crate) fn note_closed_to_tray() {
     clear_pid();
+    WAS_SHOWN.store(false, Ordering::SeqCst);
+    NAVIGATED_TO_DSH.store(false, Ordering::SeqCst);
 }
 
 pub(crate) fn clear_pid() {
     PID.store(0, Ordering::SeqCst);
     CHECKED.store(false, Ordering::SeqCst);
+}
+
+/// The window was navigated to the dsh URL (launch flow or tray restore).
+/// See [`NAVIGATED_TO_DSH`].
+pub(crate) fn note_navigated_to_dsh() {
+    NAVIGATED_TO_DSH.store(true, Ordering::SeqCst);
 }
 
 /// One supervisor tick for browser mode. `phase` selects log wording and -
@@ -133,11 +153,14 @@ where
     }
 
     // pid never captured: fall back to webui's is_shown with the was_shown
-    // latch separating "never connected" from a reliable close.
+    // latch separating "never connected" from a reliable close. The latch is
+    // only meaningful BEFORE the window navigated to dsh — afterwards the
+    // webui socket is gone by design and `is_shown` reads false forever
+    // while the browser is alive (see NAVIGATED_TO_DSH).
     let shown = is_shown(window_id);
     if shown {
         WAS_SHOWN.store(true, Ordering::SeqCst);
-    } else if WAS_SHOWN.load(Ordering::SeqCst) {
+    } else if WAS_SHOWN.load(Ordering::SeqCst) && !NAVIGATED_TO_DSH.load(Ordering::SeqCst) {
         return Tick {
             action: decide_on_close(phase),
             retry_capture: false,
@@ -192,12 +215,14 @@ fn give_up_msg(_phase: Phase) -> &'static str {
 }
 
 fn capture_due() -> bool {
-    match LAST_CAPTURE
-        .lock()
-        .unwrap_or_else(|p| p.into_inner())
-        .as_ref()
-    {
-        Some(t) => t.elapsed() >= CAPTURE_RETRY_INTERVAL,
-        None => true,
+    // Arms the throttle timestamp when it answers `true`: consecutive 50 ms
+    // supervisor ticks must not burn the attempt budget in under a second.
+    let mut last = LAST_CAPTURE.lock().unwrap_or_else(|p| p.into_inner());
+    match *last {
+        Some(t) if t.elapsed() < CAPTURE_RETRY_INTERVAL => false,
+        _ => {
+            *last = Some(Instant::now());
+            true
+        }
     }
 }

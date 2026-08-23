@@ -124,9 +124,18 @@ fn locate_browser_pid() -> Option<u32> {
         return None;
     }
 
+    // Primary: the launch command line carries the port. Fallback: the webui
+    // profile dir — browsers that forward the launch to an already-running
+    // process (Edge startup boost) drop the app flags from every process, so
+    // the port never matches; the profile's main browser process keeps
+    // `--user-data-dir=...\.WebUI\...` for its whole lifetime, and since a
+    // new launch with the same profile dir JOINS that process, the match is
+    // exactly the process our window lives in.
     let needle = format!("--app=http://localhost:{port}");
     for _ in 0..10 {
-        if let Some(pid) = crate::platform::find_process_by_cmdline(&needle) {
+        let found = crate::platform::find_process_by_cmdline(&needle)
+            .or_else(|| crate::platform::find_process_by_cmdline(".WebUI"));
+        if let Some(pid) = found {
             // Lost the race: another capture already stored a pid (and started
             // its own geometry sampler) — don't store again.
             if super::browser::pid() != 0 {
@@ -320,14 +329,48 @@ fn show_window(prefer_browser: bool, navigate_back: Option<String>) -> bool {
         // value that matches an actually-existing window, and run the steps
         // that depend on the window being alive.
         state::IS_BROWSER.store(actual_browser, Ordering::SeqCst);
-        // Tray restore navigates the fresh window back to dsh here; setup
-        // passes `None` and stays on the launcher page.
-        if let Some(url) = navigate_back {
-            window.navigate(&url);
-        }
         if actual_browser {
+            // An external browser IGNORES `--window-size/--window-position`
+            // when the launch joins an already-running browser process (Edge
+            // keeps its process alive after the last window closes — startup
+            // boost), so a restored window can come up at the profile's
+            // remembered bounds instead of the requested ones. Re-apply the
+            // saved geometry through webui's connected-client path
+            // (`window.resizeTo/moveTo`) as soon as the browser connects —
+            // and only then navigate to dsh: webui drops a navigate fired
+            // before any client connected, and after the navigation the
+            // webui socket is gone, so the resize MUST land first. Threaded:
+            // the connect wait can take seconds (cold browser start).
+            let id = window.id;
+            std::thread::spawn(move || {
+                let mut connected = false;
+                for _ in 0..200 {
+                    if state::SHUTDOWN_REQUESTED.load(Ordering::SeqCst) {
+                        return;
+                    }
+                    if webui::is_shown(id) {
+                        connected = true;
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                if connected {
+                    geometry::apply(&webui::Window::from_id(id), true);
+                } else {
+                    crate::debug::emit("browser connect wait elapsed; geometry re-apply skipped");
+                }
+                if let Some(url) = navigate_back {
+                    super::browser::note_navigated_to_dsh();
+                    webui::navigate(id, url.as_str());
+                }
+            });
             capture_browser_pid();
         } else {
+            // Tray restore navigates the fresh window back to dsh here; setup
+            // passes `None` and stays on the launcher page.
+            if let Some(url) = navigate_back {
+                window.navigate(&url);
+            }
             // Hold a keep-alive WebSocket (see `wskeep`) so the window stays
             // open after navigating to dsh: the navigation disconnects the
             // embedded WebView from webui's server, and without a live client
@@ -408,6 +451,9 @@ pub fn setup(cli_config_path: Option<PathBuf>) {
 /// Navigate the webui window to the dsh URL.
 pub fn navigate(url: &str) {
     let id = state::WINDOW_ID.load(Ordering::SeqCst);
+    if state::IS_BROWSER.load(Ordering::SeqCst) {
+        super::browser::note_navigated_to_dsh();
+    }
     webui::navigate(id, url);
 }
 
@@ -441,6 +487,9 @@ pub fn navigate_when_connected(url: &str) {
             break;
         }
         std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    if state::IS_BROWSER.load(Ordering::SeqCst) {
+        super::browser::note_navigated_to_dsh();
     }
     if webui::is_shown(id) {
         webui::navigate(id, url);

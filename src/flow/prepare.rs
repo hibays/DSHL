@@ -436,7 +436,16 @@ async fn global_program_usable(program: &std::path::Path) -> bool {
 pub async fn run(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> Result<Command> {
     progress::step("dsh", StepStatus::Running, t!("flow.prepare.preparing"));
 
-    let flags = crate::control::apply_pending_profile(split_args(&config.dsh.flags));
+    let mut flags = crate::control::apply_pending_profile(split_args(&config.dsh.flags));
+    // The launcher owns URL routing (embedded WebView or its own browser
+    // window) — dsh must never open a page in the user's default browser on
+    // its own. `dsh web` does exactly that once it prints its URL (its own
+    // hint: "opening the default browser; pass --no-open to disable"), which
+    // in browser mode means TWO pages and in webview mode a stray system
+    // browser tab over the embedded window.
+    if !flags.iter().any(|f| f == "--no-open") {
+        flags.push("--no-open".to_string());
+    }
 
     // Resolve the target version: a pinned version, or the latest release
     // (queried only when auto-update is on).

@@ -142,14 +142,15 @@ pub fn run_loop() {
             exit::request_shutdown();
             break;
         }
-
         // Browser mode: ONE poll tick owns all browser-lifecycle detection -
         // pid-alive check, the was_shown latch for an uncaptured pid, capture
         // throttling and its retry budget - and returns what must happen when
         // a close is detected. Startup phase: a close quits outright (there
         // is nothing to hand over to yet). Supervising phase: honour
-        // close-to-tray.
-        if state::IS_BROWSER.load(Ordering::SeqCst) {
+        // close-to-tray. Skipped while TRAYED: the window has already been
+        // handed over (and its webui id freed), so every tick would only
+        // re-detect the same stale "closed" state in a loop.
+        if state::IS_BROWSER.load(Ordering::SeqCst) && !state::TRAYED.load(Ordering::SeqCst) {
             let phase = if state::LAUNCHED.load(Ordering::SeqCst) {
                 browser::Phase::Supervising
             } else {
