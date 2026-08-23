@@ -122,10 +122,9 @@ jobs:
             $ErrorActionPreference = 'Stop'
             $ProgressPreference = 'SilentlyContinue'
             $url = 'https://prdownloads.sourceforge.net/nsis/nsis-3.10.zip'
-            # pwsh's Invoke-WebRequest fails to load its web cmdlet assembly on
-            # the ARM64 runner (GAC/OperationStopped); curl.exe ships with the
-            # OS image.
-            curl.exe -LsS -o nsis.zip $url
+            # pwsh's Invoke-WebRequest fails to load its web cmdlet assembly on the
+  # ARM64 runner (GAC/OperationStopped) - curl.exe ships with the OS image.
+  curl.exe -LsS -o nsis.zip $url
             Expand-Archive -Path nsis.zip -DestinationPath C:\nsis -Force
             Remove-Item nsis.zip
             Add-Content $env:GITHUB_PATH 'C:\nsis\nsis-3.10'
