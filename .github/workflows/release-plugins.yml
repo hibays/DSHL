@@ -68,6 +68,8 @@ jobs:
 
       - name: Sync version into all three package.json files
         shell: bash
+        env:
+          VERSION: ${{ needs.guard.outputs.version }}
         run: node scripts/bump-versions.mjs "$VERSION"
 
       - name: Verify npm pack contents (dry run)
