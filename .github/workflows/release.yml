@@ -105,7 +105,7 @@ jobs:
 
       - name: Package zip
         shell: bash
-        run: bash scripts/package.sh portable --zip "dshl-${{ matrix.artifact }}.zip"
+        run: bash scripts/package.sh portable --zip "dshl-$VERSION-${{ matrix.artifact }}.zip"
 
       - name: Install NSIS (Windows installer)
         if: matrix.family == 'windows'
@@ -192,6 +192,26 @@ jobs:
             git log --encoding=UTF-8 --pretty=format:'- %s (%h)' "$RANGE"
             echo ""
           } > CHANGELOG.md
+          # Beginner-friendly quick-pick table: who/what device -> which file,
+          # with direct download links. Prepended above the commit list.
+          DL="$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/releases/download/${{ github.ref_name }}"
+          {
+            echo "downloads<<TABLE"
+            echo "## 快速下载 / Quick download"
+            echo ""
+            echo "选不对就选第一个 zip：便携版、解压即用、自带默认配置。"
+            echo ""
+            echo "| 你的系统 / Your system | 下载 / Download |"
+            echo "|---|---|"
+            echo "| Windows 10/11 · 64 位（大多数电脑）| [安装版 setup.exe]($DL/dshl-$VERSION-windows-x86_64-setup.exe) · [便携版 zip]($DL/dshl-$VERSION-windows-x86_64.zip) |"
+            echo "| Windows on ARM（Surface Pro X 等）| [安装版 setup.exe]($DL/dshl-$VERSION-windows-aarch64-setup.exe) · [便携版 zip]($DL/dshl-$VERSION-windows-aarch64.zip) |"
+            echo "| macOS Apple Silicon（M1/M2/M3/M4）| [dshl-$VERSION-macos-aarch64.dmg]($DL/dshl-$VERSION-macos-aarch64.dmg) |"
+            echo "| macOS Intel 芯片 | [dshl-$VERSION-macos-x86_64.dmg]($DL/dshl-$VERSION-macos-x86_64.dmg) |"
+            echo "| Linux x64 · Ubuntu/Debian 系 | [安装包 .deb]($DL/dshl_${VERSION}_amd64.deb) · [便携版 zip]($DL/dshl-$VERSION-linux-x86_64.zip) |"
+            echo "| Linux ARM64 · Ubuntu/Debian 系 | [安装包 .deb]($DL/dshl_${VERSION}_arm64.deb) · [便携版 zip]($DL/dshl-$VERSION-linux-aarch64.zip) |"
+            echo "TABLE"
+          } >> "$GITHUB_OUTPUT"
+
           {
             echo "changelog<<EOF"
             cat CHANGELOG.md
@@ -202,7 +222,12 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           name: ${{ github.ref_name }}
-          body: ${{ steps.changelog.outputs.changelog }}
+          body: |
+            ${{ steps.changelog.outputs.downloads }}
+
+            ## 更新内容 / What changed
+
+            ${{ steps.changelog.outputs.changelog }}
           files: dist/*
           draft: false
           prerelease: false

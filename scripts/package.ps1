@@ -54,9 +54,9 @@ Copy-Item README_en.md $stage/
     New-Item -ItemType Directory -Force -Path $portable | Out-Null
     Copy-Item "$stage/*" $portable
     Copy-Item dshl.example.toml (Join-Path $portable 'dshl.toml')
-    Compress-Archive -Force -Path "$portable/*" -DestinationPath "dshl-windows-$arch.zip"
+    Compress-Archive -Force -Path "$portable/*" -DestinationPath "dshl-$Version-windows-$arch.zip"
     Remove-Item -Recurse -Force $portable
-    Write-Host "== wrote dshl-windows-$arch.zip" -ForegroundColor Green
+    Write-Host "== wrote dshl-$Version-windows-$arch.zip" -ForegroundColor Green
 
     if (-not $NoInstaller) {
         Copy-Item packing/windows/dsh.ico $stage/
@@ -68,10 +68,10 @@ Copy-Item README_en.md $stage/
         & $makensis -V3 `
             "-DSTAGE_DIR=$stage" `
             "-DPRODUCT_VERSION=$Version" `
-            "-DOUTFILE=$root\dshl-windows-$arch-setup.exe" `
+            "-DOUTFILE=$root\dshl-$Version-windows-$arch-setup.exe" `
             packing/windows/dshl.nsi
         if ($LASTEXITCODE -ne 0) { exit 1 }
-        Write-Host "== wrote dshl-windows-$arch-setup.exe" -ForegroundColor Green
+        Write-Host "== wrote dshl-$Version-windows-$arch-setup.exe" -ForegroundColor Green
     }
 }
 else {

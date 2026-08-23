@@ -58,11 +58,22 @@ case "$CMD" in
     ;;
 
   portable)
-    ZIP="dshl-portable.zip"
+    ZIP=""
     while [ $# -gt 0 ]; do case "$1" in
       --zip) ZIP="$2"; shift 2 ;;
+      --version) _pv="$2"; shift 2 ;;
       *) echo "unknown flag: $1" >&2; exit 2 ;;
     esac; done
+    # Default name embeds the version (asset-naming convention:
+    # dshl-<version>-<os>-<arch>.zip); an explicit --zip still wins.
+    if [ -z "$ZIP" ]; then
+      case "$(uname -s)" in
+        Linux)  _os=linux ;;
+        Darwin) _os=macos ;;
+        *)      _os=windows ;;
+      esac
+      ZIP="dshl-${_pv:-0.0.0}-${_os}.zip"
+    fi
     need_stage
     tmp="$(mktemp -d)"
     cp stage/* "$tmp/"
@@ -103,7 +114,7 @@ PY
     # script's directory instead of the working directory. Under MSYS/git-bash
     # the native exe needs Windows-style paths (cygpath), POSIX elsewhere.
     stage_dir="$root/stage"
-    outfile="$root/dshl-$ARTIFACT-setup.exe"
+    outfile="$root/dshl-${VERSION}-${ARTIFACT}-setup.exe"
     if command -v cygpath >/dev/null 2>&1; then
       stage_dir="$(cygpath -w "$stage_dir")"
       outfile="$(cygpath -w "$outfile")"
@@ -138,7 +149,7 @@ PY
     esac; done
     [ -n "$VERSION" ] && [ -n "$ARTIFACT" ] || { echo "--version/--artifact required" >&2; exit 2; }
     need_stage
-    bash packing/macos/build-dmg.sh stage/dshl "$VERSION" . "" "dshl-$ARTIFACT.dmg"
+    bash packing/macos/build-dmg.sh stage/dshl "$VERSION" . "" "dshl-${VERSION}-${ARTIFACT}.dmg"
     ;;
 
   all)
@@ -157,8 +168,13 @@ PY
       MINGW*|MSYS*|CYGWIN*) ext=.exe ;;
       *) ext= ;;
     esac
+    case "$(uname -s)" in
+      Linux)  _os=linux ;;
+      Darwin) _os=macos ;;
+      *)      _os=windows ;;
+    esac
     "$0" stage --bin "target/release/dshl$ext"
-    "$0" portable --zip "dshl-$(uname -s | tr '[:upper:]' '[:lower:]')-$arch.zip"
+    "$0" portable --zip "dshl-${VERSION}-${_os}-${arch}.zip"
     if [ "$NO_INSTALLER" -eq 0 ]; then
       case "$(uname -s)" in
         Linux) case "$arch" in x86_64) da=amd64 ;; *) da=arm64 ;; esac; "$0" deb --version "$VERSION" --deb-arch "$da" ;;
