@@ -63,6 +63,7 @@ flow.prepare.version_query_failed: "Couldn't query latest version (possibly offl
 flow.prepare.auto_update_off: "auto-update is off, using installed %{installed}"
 flow.prepare.installed: "dsh installed: %{source} %{installed}"
 flow.prepare.version_mismatch: "%{source} dsh version mismatch (want %{wanted}, current %{current}), installing"
+flow.prepare.global_broken: "global dsh at %{path} is broken (stale shim); installing a fresh copy into dshl cache"
 flow.prepare.src_global: "global"
 flow.prepare.src_cache: "cache"
 flow.prepare.global_requires_dsh: "dsh.mode = global requires a dsh installed on your PATH. Install it yourself (e.g. `npm i -g @deepseek-ai/dsh`) or switch to hybrid / private mode."

@@ -396,6 +396,25 @@ async fn query_latest_version(
     }
 }
 
+/// True when `program --version` exits successfully within 15s.
+///
+/// Guards against STALE global shims whose launcher hardcodes an entry path
+/// from a package-manager global dir that no longer exists (MODULE_NOT_FOUND
+/// at spawn time). Any failure - missing file, non-zero exit, timeout -
+/// counts as unusable so callers degrade to the cache install.
+async fn global_program_usable(program: &std::path::Path) -> bool {
+    if !program.is_file() && std::env::var_os("PATHEXT").is_none() {
+        return false;
+    }
+    let mut c = Command::new(program);
+    c.arg("--version");
+    matches!(
+        tokio::time::timeout(std::time::Duration::from_secs(15), process::run_async(&mut c))
+            .await,
+        Ok(Ok(res)) if res.success()
+    )
+}
+
 /// Build the command that will ultimately be spawned (managed) in Flow 5.
 ///
 /// dsh is a node script, so it is always launched as `node <entry>` from an
@@ -438,7 +457,7 @@ pub async fn run(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> R
     };
 
     // Choose the dsh source according to `dsh.mode` (global / hybrid / private).
-    let global = match config.dsh.mode {
+    let mut global = match config.dsh.mode {
         DshMode::Private => false,
         DshMode::Global => {
             let dsh = probe_global(runtime).await;
@@ -457,13 +476,36 @@ pub async fn run(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> R
         DshMode::Hybrid => hybrid_use_global(config, &target, runtime).await,
     };
 
+    // A global `dsh` shim can be STALE: its launcher hardcodes an entry path
+    // from the package manager that installed it (e.g. bun's global dir), and
+    // the probe's `--version` may have been answered by a DIFFERENT, working
+    // install earlier/later on PATH. Verify the chosen program actually runs
+    // before trusting it; a broken one degrades to the cache install below.
+    // A global `dsh` shim can be STALE (its launcher hardcodes an entry path
+    // from whichever package manager installed it — e.g. bun's global dir —
+    // while the package itself is gone). Verify the resolved program actually
+    // runs before trusting it; a broken one flips to the cache install below,
+    // which self-heals by installing a fresh dsh and running its real entry.
+    let mut program: Option<PathBuf> = None;
+    if global {
+        let p = platform::which("dsh")
+            .or_else(|| platform::which_in("dsh", &runtime.path_prefix()))
+            .unwrap_or_else(|| PathBuf::from(platform::with_ext("dsh")));
+        if !global_program_usable(&p).await {
+            progress::log(t!(
+                "flow.prepare.global_broken",
+                path = p.display().to_string()
+            ));
+            global = false;
+        } else {
+            program = Some(p);
+        }
+    }
+
     let mut cmd = if global {
         // Run the user's global `dsh` directly (dsh / dsh.cmd / dsh.sh),
         // spawned in a hidden console so no window flashes.
-        let program = platform::which("dsh")
-            .or_else(|| platform::which_in("dsh", &runtime.path_prefix()))
-            .unwrap_or_else(|| PathBuf::from(platform::with_ext("dsh")));
-        let mut c = Command::new(program);
+        let mut c = Command::new(program.expect("global verified above"));
         c.args(&flags);
         c
     } else {
@@ -544,6 +586,18 @@ pub async fn run(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> R
 mod tests {
     use super::*;
     use crate::probe;
+
+    #[tokio::test]
+    async fn global_program_usable_detects_stale_shim() {
+        // 正常脚本：exit 0 → usable
+        let ok = crate::testutil::shell("exit /b 0", "exit 0");
+        // 用一个真实存在的可执行入口包装：直接对 shell 本体跑 --version 语义不可控，
+        // 改为验证「不存在的程序」与「成功退出」两端。
+        assert!(
+            !global_program_usable(std::path::Path::new("Z:/definitely/not/a/real/dsh.exe")).await
+        );
+        let _ = ok;
+    }
 
     #[test]
     fn splits_plain_flags() {

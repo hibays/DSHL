@@ -63,6 +63,7 @@ flow.prepare.version_query_failed: "无法查询最新版本（可能离线）�
 flow.prepare.auto_update_off: "auto-update 关闭，使用已安装的 %{installed}"
 flow.prepare.installed: "dsh 已安装：%{source} %{installed}"
 flow.prepare.version_mismatch: "%{source} dsh 版本不匹配（需要 %{wanted}，当前 %{current}），安装中"
+flow.prepare.global_broken: "全局 dsh（%{path}）已失效（残留壳）；改为在 dshl 缓存中安装全新副本"
 flow.prepare.src_global: "全局"
 flow.prepare.src_cache: "缓存"
 flow.prepare.global_requires_dsh: "dsh.mode = global 需要你的 PATH 上已安装 dsh。请自行安装（如 `npm i -g @deepseek-ai/dsh`），或改用 hybrid / private 模式。"
