@@ -62,7 +62,6 @@ pub(crate) static KEEPALIVE: Mutex<Option<crate::wskeep::KeepAlive>> = Mutex::ne
 /// pid-based close detection entirely (restore appears to work once, then
 /// every later cycle goes dead).
 pub(crate) static BROWSER_CAPTURE_ATTEMPTS: AtomicU32 = AtomicU32::new(0);
-pub(crate) static BROWSER_CAPTURE_GIVEN_UP: AtomicBool = AtomicBool::new(false);
 
 /// webui window id whose resources the supervisor should free (0 = none).
 /// Set when a window closes to the tray so its (large) struct + server + port

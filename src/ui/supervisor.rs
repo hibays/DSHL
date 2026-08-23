@@ -195,7 +195,8 @@ pub fn run_loop() {
                 // re-locating its pid (throttled) up to the retry cap so
                 // pid-based detection can take over if it ever lands and so
                 // `stop_browser()` can reap it on shutdown.
-                if !state::BROWSER_CAPTURE_GIVEN_UP.load(Ordering::SeqCst)
+                if state::BROWSER_CAPTURE_ATTEMPTS.load(Ordering::SeqCst)
+                    < BROWSER_CAPTURE_ATTEMPTS_LIMIT
                     && last_browser_capture.elapsed() >= std::time::Duration::from_secs(2)
                 {
                     state::BROWSER_CAPTURE_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
@@ -206,9 +207,7 @@ pub fn run_loop() {
                         // is_shown detection above still catches a real close;
                         // this only ends the pid re-location so the loop no
                         // longer spins on this capture path.
-                        crate::debug::emit("run_loop: giving up browser pid capture");
-                        state::BROWSER_CAPTURE_GIVEN_UP.store(true, Ordering::SeqCst);
-                    } else {
+                        crate::debug::emit("run_loop: giving up browser pid capture");                    } else {
                         crate::debug::emit(
                             "run_loop: startup browser pid unknown; retrying capture",
                         );
@@ -268,16 +267,15 @@ pub fn run_loop() {
                     // re-locating its pid (throttled) up to the shared retry
                     // cap, so pid-based detection takes over if it lands and so
                     // `stop_browser()` can reap the browser on shutdown.
-                    if !state::BROWSER_CAPTURE_GIVEN_UP.load(Ordering::SeqCst)
+                    if state::BROWSER_CAPTURE_ATTEMPTS.load(Ordering::SeqCst)
+                        < BROWSER_CAPTURE_ATTEMPTS_LIMIT
                         && last_browser_capture.elapsed() >= std::time::Duration::from_secs(2)
                     {
                         state::BROWSER_CAPTURE_ATTEMPTS.fetch_add(1, Ordering::SeqCst);
                         if state::BROWSER_CAPTURE_ATTEMPTS.load(Ordering::SeqCst)
                             >= BROWSER_CAPTURE_ATTEMPTS_LIMIT
                         {
-                            crate::debug::emit("run_loop: giving up browser pid capture");
-                            state::BROWSER_CAPTURE_GIVEN_UP.store(true, Ordering::SeqCst);
-                        } else {
+                            crate::debug::emit("run_loop: giving up browser pid capture");                        } else {
                             crate::debug::emit("run_loop: browser pid unknown; retrying capture");
                             window::capture_browser_pid();
                             last_browser_capture = std::time::Instant::now();
