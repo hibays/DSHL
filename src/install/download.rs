@@ -1,5 +1,6 @@
-//! Zip download + extraction and small file helpers shared by the installers
-//! (fnm auto-install, bun download) and the github proxy prefix logic.
+//! Zip download + extraction, registry-tarball helpers shared by the
+//! installers (fnm auto-install, nub/bun registry installs), and the github
+//! proxy prefix logic.
 
 use std::path::{Path, PathBuf};
 
@@ -108,10 +109,14 @@ pub(crate) async fn install_fnm_binary(mirror: &MirrorConfig) -> Result<PathBuf>
         )
     })?;
 
-    let asset = match platform::os() {
-        platform::Os::Windows => "fnm-windows.zip",
-        platform::Os::Macos => "fnm-macos.zip",
-        platform::Os::Linux => "fnm-linux.zip",
+    // Asset names mirror upstream's own installer (.ci/install.sh): Windows
+    // has a single asset for every arch (upstream ships no per-arch Windows
+    // zips), macOS is universal via brew/zip, Linux splits arm64 out.
+    let asset = match (platform::os(), platform::arch()) {
+        (platform::Os::Windows, _) => "fnm-windows.zip",
+        (platform::Os::Macos, _) => "fnm-macos.zip",
+        (platform::Os::Linux, platform::Arch::Aarch64) => "fnm-arm64.zip",
+        (platform::Os::Linux, _) => "fnm-linux.zip",
     };
     let original = format!("https://github.com/Schniz/fnm/releases/latest/download/{asset}");
     let url = proxied_github(mirror, &original);
@@ -203,6 +208,15 @@ pub(crate) async fn extract_tgz(tgz: &Path, dest_dir: &Path) -> Result<()> {
     run_streaming(cmd, "extract").await
 }
 
+/// The registry tarball URL for a package version — single source of truth
+/// shared by [`fetch_package_extracted`] and the installers' progress logs,
+/// so a logged URL can never drift from the downloaded one.
+pub(crate) fn package_tgz_url(mirror: &MirrorConfig, name: &str, version: &str) -> String {
+    let base = registry_base(mirror);
+    let short = short_name(name);
+    format!("{base}/{name}/-/{short}-{version}.tgz")
+}
+
 /// Fetch an npm package tarball straight from the registry and extract it.
 ///
 /// Returns the extracted `package/` directory (the tarball's single root).
@@ -214,12 +228,7 @@ pub(crate) async fn fetch_package_extracted(
     version: &str,
     stage_dir: &Path,
 ) -> Result<std::path::PathBuf> {
-    let base = registry_base(mirror);
-    let meta = format!("{base}/{name}/latest");
-    let _ = &meta;
-
-    let short = short_name(name);
-    let tgz_url = format!("{base}/{name}/-/{short}-{version}.tgz");
+    let tgz_url = package_tgz_url(mirror, name, version);
     let tgz = stage_dir.join("pkg.tgz");
     http_download(&tgz_url, &tgz).await?;
     let out = stage_dir.join("extracted");

@@ -120,34 +120,36 @@ tool that already satisfies the requirement is used as-is, never
 reinstalled**.
 
 ```mermaid
-flowchart TD
-    P["probe node/bun/pnpm/nub/fnm/cargo/nvm"] --> Q{"node >= 24.15.0 ?"}
-    Q -- "yes: zero installs" --> DONE[runtime ready]
-    Q -- "missing / outdated" --> M{pm = "nub" AND<br>mirrors.npm configured ?}
+sequenceDiagram
+    autonumber
+    participant P as 1 concurrent probe<br/>node/bun/pnpm/nub/fnm/cargo/nvm
+    participant N as 2 nub route
+    participant F as 3 fallback chain
+    participant R as registry (mirrors.npm)
 
-    M -- "yes" --> N1["install @nubjs/nub via npm mirror<br>-> <cache>/dshl/nub"]
-    N1 --> N2{"installed ?"}
-    N2 -- "no" --> H
-    N2 -- "yes" --> N3["nub node install 26<br>(NODEJS_ORG_MIRROR)"]
-    N3 --> N4{"nub node which<br>resolves a binary ?"}
-    N4 -- "yes" --> NDONE[node dir = provided by nub OK]
-    N4 -- "no" --> H
-
-    M -- "no (no mirror)" --> H["fnm -> cargo install fnm -> nvm<br>-> auto-install fnm -> manual guide link"]
-    H --> DONE
-
-    DONE --> PM
-    subgraph PM["package manager (installs @deepseek-ai/dsh into cache)"]
-        direction LR
-        PN1["pm=nub: nub add (mirrored)"] ~~~ PN2["pm=bun: binary via GitHub mirror"] ~~~ PN3["pm=pnpm/npm: direct"]
+    P->>P: node >= 24.15.0 ?
+    alt already satisfied
+        P-->>P: zero installs, used as-is
+    else pm = "nub" AND mirrors.npm configured
+        P->>R: install @nubjs/nub into dshl's cache
+        P->>N: nub node install 26 (NODEJS_ORG_MIRROR)
+        N-->>P: nub node which resolves the node dir
+        Note over P,F: install fails / no binary resolved -> falls to 3
+    else no mirror configured
+        P->>F: straight to the fallback chain
     end
+    F->>F: fnm -> cargo install fnm -> nvm<br/>(auto-installs fnm -> manual guide link)
+    Note over P,R: runtime ready - first principle: never reinstall an existing tool
+    Note over P,R: the package manager installs @deepseek-ai/dsh into the cache<br/>nub = nub add · bun = @oven platform tarball via registry · pnpm/npm = direct
 ```
 
 The mirror layer cross-cuts every network step above, injected as temporary
 env/flags only - never written to global config: mirrors.npm feeds
-npm/bun/pnpm/nub registries and nub's own install; mirrors.nodejs_release
-feeds fnm/nvm/nub Node dist downloads; mirrors.bun_download /
-mirrors.github cover their download sources.
+npm/bun/pnpm/nub registries, nub's own install AND the bun binary (same
+channel as nub: @oven/bun-* platform tarballs straight from the registry,
+not GitHub); mirrors.nodejs_release feeds fnm/nvm/nub Node dist downloads;
+mirrors.github proxies what still comes from GitHub (template default
+https://gh-proxy.org/, empty = direct).
 
 **Offline & weak-network semantics**: download-class operations (bun/nub
 binaries, Node dists) are resumable - after an interruption they continue
@@ -278,11 +280,10 @@ monotonic timestamp (`src/debug.rs`). Debug builds keep a console, so
 auto-mirror = "on"
 
 [mirrors]
-npm            = "http://registry.npmmirror.com"     # also used by bun
+npm            = "http://registry.npmmirror.com"     # packages and the bun/nub binaries
 cargo          = "sparse+https://rsproxy.cn/index/"  # temporary, CLI-only
 nodejs-release = "https://mirrors.aliyun.com/nodejs-release/"
-bun-download   = ""                                   # empty = not used
-github         = ""                                   # proxy prefix, e.g. https://ghproxy.com/
+github         = "https://gh-proxy.org/"             # template default; empty = direct
 
 [dsh]
 flags       = "--profile web --host 127.0.0.1 --port 0"
@@ -294,8 +295,8 @@ single-instance = false   # true = refuse to start dsh while another dsh is runn
 
 [ui]
 mode    = "webview"   # webview | browser (a *preference*, always falls back)
-close-to-tray = false # true = close the window fully into the tray (dsh keeps running); tray icon rebuilds it; Windows/Linux/macOS
-single-instance = false # true = only one dshl instance; a second one activates the existing one (focus or restore)
+close-to-tray = true  # default. close into tray (dsh keeps running); false = close exits
+single-instance = true # default. one dshl instance; a second one activates the existing one
 ```
 
 An empty mirror address means that mirror is **not used**. Mirrors are applied
@@ -340,11 +341,11 @@ processes appending to the same session log corrupt it permanently. The check
 runs after the stale-process cleanup, so a previous dsh of our own that exited
 cleanly is not a conflict.
 
-### Close to tray (optional)
+### Close to tray
 
-By default closing the window exits (and gracefully stops dsh). With
-`close-to-tray = true`, once dsh is up, closing the window no longer exits —
-dsh keeps running in the background:
+`close-to-tray` defaults to `true`: once dsh is up, closing the window no
+longer exits - dsh keeps running in the background (set `false` to restore
+exit-on-close):
 
 - **The window is closed for real** (WebView2 / WebKitGTK processes exit,
   memory is freed); only the tray icon, the launcher and dsh stay resident.
@@ -386,7 +387,7 @@ pixels through the DPI scale for browser command lines.
 ### Single-instance for dshl (optional)
 
 `[dsh] single-instance` guards **dsh itself**; `[ui] single-instance`
-guards the **dshl launcher**: when enabled, only one dshl process may run on
+guards the **dshl launcher** (on by default): only one dshl process may run on
 the machine (lock file + kernel file lock — released automatically on crash,
 so stale locks are impossible). A second dshl does not create a new window;
 it **activates the existing instance** and exits:
@@ -409,9 +410,9 @@ to `<cache>/dshl/dsh.log` while the `http://127.0.0.1:<port>` line is
 captured). The launcher then routes the startup window to that URL and **stays
 alive as a supervisor**, so shutting down is always clean:
 
-- **closing the window that shows dsh** → by default dsh is stopped and the
-  launcher exits; with `close-to-tray` enabled (and dsh already up) it goes
-  to the **tray** instead and dsh keeps running. This works for both window
+- **closing the window that shows dsh** → with `close-to-tray` (default) and
+  dsh already up it goes to the **tray** and dsh keeps running; otherwise dsh
+  is stopped and the launcher exits. This works for both window
   backends:
   - `webview` — embedded WebView (WebView2 / WKWebView / WebKitGTK). The launcher
     holds a keep-alive WebSocket to its own webui server (`multi_client`) so the

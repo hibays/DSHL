@@ -13,7 +13,6 @@ pub struct MirrorConfig {
     pub npm: Option<String>,
     pub cargo: Option<String>,
     pub nodejs_release: Option<String>,
-    pub bun_download: Option<String>,
     pub github: Option<String>,
 }
 
@@ -34,7 +33,6 @@ impl MirrorConfig {
             npm: non_empty(&m.npm),
             cargo: non_empty(&m.cargo),
             nodejs_release: non_empty(&m.nodejs_release),
-            bun_download: non_empty(&m.bun_download),
             github: non_empty(&m.github),
         }
     }
@@ -128,9 +126,6 @@ impl MirrorConfig {
             }
             if let Some(s) = &self.nodejs_release {
                 v.push(("nodejs-release".into(), s.clone()));
-            }
-            if let Some(s) = &self.bun_download {
-                v.push(("bun-download".into(), s.clone()));
             }
             if let Some(s) = &self.github {
                 v.push(("github".into(), s.clone()));

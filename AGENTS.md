@@ -111,7 +111,7 @@ scripts/publish.ps1|publish.sh -Version x.y.z [-DryRun]  # Track B npm 发布（
 - Rust：edition 2024、resolver 3、workspace 统一版本（当前 0.2.0）；release profile `opt-level="z"` + lto + strip。
 - tokio 仅开实际用到的 feature（rt-multi-thread/macros/process/time/io-util/sync/net）——加异步能力时先扩 feature 再用。
 - JS 侧：Node >=22、全 ESM（`"type": "module"`）、npm workspaces（`plugins/*`）；验证与打包走根 `package.json` scripts（`check` / `pack:dry` / `publish:all` / `build:native`）。
-- 环境隔离原则：dsh 装进 dshl 缓存并注入子进程 PATH，绝不全局安装；镜像只经 env / CLI 参数临时注入（npm/cargo/nodejs-release/bun-download/github 五路，见 `dshl.example.toml`）。
+- 环境隔离原则：dsh 装进 dshl 缓存并注入子进程 PATH，绝不全局安装；镜像只经 env / CLI 参数临时注入（npm/cargo/nodejs-release/github 四路，见 `dshl.example.toml`；bun/nub 本体与包安装同走 npm registry）。
 - CI 矩阵：Rust 在 ubuntu-latest + windows-11-arm（aarch64-pc-windows-msvc，抓 ARM64 回归）双跑；Linux 需 gtk-3 / webkit2gtk-4.1 / ayatana-appindicator 系统包；JS job 单独跑语法检查与 pack 校验。
 
 - **网络策略**：安装/下载类子进程不设超时（正确性靠 curl 断点续传 + 工具自身重试）；探测/校验类子进程必须有界（probe 30s、registry 查询 3s、全局校验 15s）。

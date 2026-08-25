@@ -1,12 +1,14 @@
 //! Bun: [`ensure_bun`] and the install fallback chain.
 //!
 //! Bun is installed only when the config's `pm` asks for it. Chain:
-//! direct binary download (bun-download mirror → github proxy → github) →
-//! official install script → npm install into dshl's cache (respects the npm
-//! registry mirror). Never installed globally.
+//! registry-direct tarball (`@oven/bun-<platform>`, same channel as nub —
+//! respects the npm mirror, resumable, no npm process) → official install
+//! script → npm install into dshl's cache (respects the npm registry
+//! mirror). Never installed globally.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::config::Config;
 use crate::error::{Error, Result};
@@ -20,6 +22,10 @@ use super::BUN_MIN;
 use super::download;
 use super::stream::run_streaming;
 
+/// Session-level negative cache (same rationale as nub's): once a full
+/// install attempt fails, do NOT retry it on every startup — retrying a
+/// doomed install added seconds of perceived launch delay to every boot.
+static INSTALL_FAILED: AtomicBool = AtomicBool::new(false);
 /// Ensure bun is installed when the config requires it.
 pub async fn ensure_bun(config: &Config, mirror: &MirrorConfig) -> Result<Option<PathBuf>> {
     if !config.dsh.needs_bun() {
@@ -61,7 +67,25 @@ pub async fn ensure_bun(config: &Config, mirror: &MirrorConfig) -> Result<Option
         }
     }
 
-    install_bun(mirror).await.map(Some)
+    // Arch Linux manages bun with pacman; the user installs it themselves
+    // (CLI autonomy) instead of dshl downloading a binary. Checked BEFORE
+    // the negative cache so its specific guidance is never swallowed by a
+    // generic "install failed" left over from an earlier attempt.
+    if platform::distro() == platform::Distro::Arch {
+        progress::log(t!("install.bun.arch_pacman"));
+        return Err(Error(t!("install.bun.arch_pacman_fatal").to_string()));
+    }
+
+    if INSTALL_FAILED.load(Ordering::Relaxed) {
+        return Err(Error(t!("install.bun.failed").to_string()));
+    }
+    match install_bun(mirror).await {
+        Ok(dir) => Ok(Some(dir)),
+        Err(e) => {
+            INSTALL_FAILED.store(true, Ordering::Relaxed);
+            Err(e)
+        }
+    }
 }
 
 async fn install_bun(mirror: &MirrorConfig) -> Result<PathBuf> {
@@ -69,31 +93,15 @@ async fn install_bun(mirror: &MirrorConfig) -> Result<PathBuf> {
     let bin = install_dir.join("bin");
     std::fs::create_dir_all(&install_dir).map_err(|e| Error(e.to_string()))?;
 
-    // Arch Linux manages bun with pacman; the user installs it themselves
-    // (CLI autonomy) instead of dshl downloading a binary.
-    if platform::distro() == platform::Distro::Arch {
-        progress::log(t!("install.bun.arch_pacman"));
-        return Err(Error(t!("install.bun.arch_pacman_fatal").to_string()));
-    }
-
-    // 1. Direct binary download. Resolution order:
-    //    a) `bun-download` mirror (highest priority),
-    //    b) github through the `github` proxy prefix (when configured),
-    //    c) github directly.
-    let url = bun_download_url(mirror);
-    progress::log(t!("install.bun.downloading", url = url));
-    if let Ok(()) = download::download_zip(&url, &install_dir).await
-        && let Some(found) = download::locate_file(&install_dir, "bun")
+    // 1. Registry-direct tarball (`@oven/bun-<platform>`): honours
+    //    `mirrors.npm`, resumable, never spawns npm. Replaces the old
+    //    GitHub-release zip download (and its dedicated `bun-download`
+    //    mirror route) entirely.
+    if install_bun_from_registry(mirror, &install_dir, &bin)
+        .await
+        .is_ok()
     {
-        let dest = bin.join(platform::with_ext("bun"));
-        std::fs::create_dir_all(&bin).ok();
-        if found != dest {
-            let _ = std::fs::copy(&found, &dest);
-        }
-        download::make_executable(&dest);
-        if dest.is_file() {
-            return Ok(bin);
-        }
+        return Ok(bin);
     }
     progress::log(t!("install.bun.direct_failed"));
 
@@ -136,96 +144,82 @@ async fn install_bun(mirror: &MirrorConfig) -> Result<PathBuf> {
     Err(Error(t!("install.bun.failed").to_string()))
 }
 
-/// Resolve the direct bun binary download URL.
-///
-/// `bun-download` takes priority when set; otherwise bun is fetched from its
-/// GitHub release, going through the `github` proxy prefix when one is
-/// configured (empty `github` = download from github directly).
-fn bun_download_url(mirror: &MirrorConfig) -> String {
-    let target = bun_zip_target();
-    if mirror.enabled()
-        && let Some(base) = &mirror.bun_download
-    {
-        return format!("{}/{}", base.trim_end_matches('/'), target);
+/// Install bun by fetching its `@oven/bun-<platform>` binary package
+/// straight from the configured registry (npmjs.org or a mirror), exactly
+/// like [`super::nub`] does for `@nubjs/nub`. Verified upstream layout:
+/// the tarball carries `package/bin/bun[.exe]`.
+async fn install_bun_from_registry(
+    mirror: &MirrorConfig,
+    stage_root: &Path,
+    bin: &Path,
+) -> Result<()> {
+    let pkg = oven_package();
+    let base = download::registry_base(mirror);
+    let latest =
+        download::http_get_text(&format!("{base}/{}/latest", pkg.replace('/', "%2F"))).await?;
+    let version = download::extract_json_string(&latest, "version")
+        .ok_or_else(|| Error("registry latest response has no version".into()))?;
+
+    let stage = stage_root.join(".stage");
+    let _ = std::fs::remove_dir_all(&stage);
+    progress::log(t!(
+        "install.bun.downloading",
+        url = download::package_tgz_url(mirror, pkg, &version)
+    ));
+    let pkg_dir = download::fetch_package_extracted(mirror, pkg, &version, &stage).await?;
+    let found = download::locate_file(&pkg_dir, "bun")
+        .ok_or_else(|| Error("registry tarball contains no bun binary".into()))?;
+    std::fs::create_dir_all(bin).map_err(|e| Error(e.to_string()))?;
+    let dest = bin.join(platform::with_ext("bun"));
+    if found != dest {
+        std::fs::copy(&found, &dest).map_err(|e| Error(e.to_string()))?;
     }
-    let original = format!("https://github.com/oven-sh/bun/releases/latest/download/{target}");
-    download::proxied_github(mirror, &original)
+    download::make_executable(&dest);
+    let _ = std::fs::remove_dir_all(&stage);
+    if !dest.is_file() {
+        return Err(Error("failed to place the bun binary".into()));
+    }
+    Ok(())
 }
 
-fn bun_zip_target() -> &'static str {
-    match (platform::os(), platform::arch()) {
-        (platform::Os::Windows, _) => "bun-windows-x64.zip",
-        (platform::Os::Macos, platform::Arch::Aarch64) => "bun-darwin-aarch64.zip",
-        (platform::Os::Macos, _) => "bun-darwin-x64.zip",
-        (platform::Os::Linux, platform::Arch::Aarch64) => "bun-linux-aarch64.zip",
-        (platform::Os::Linux, _) => "bun-linux-x64.zip",
+/// The @oven platform binary package for this OS/arch — bun's own npm
+/// optionalDependencies naming (the `bun` wrapper package pulls these in).
+fn oven_package() -> &'static str {
+    oven_package_for(platform::os(), platform::arch())
+}
+
+/// Pure mapping so the full platform matrix (including Windows ARM64) is
+/// unit-testable on any host. `Arch::Other` falls through to x64, matching
+/// the pre-registry zip behaviour.
+fn oven_package_for(os: platform::Os, arch: platform::Arch) -> &'static str {
+    match (os, arch) {
+        (platform::Os::Windows, platform::Arch::Aarch64) => "@oven/bun-windows-aarch64",
+        (platform::Os::Windows, _) => "@oven/bun-windows-x64",
+        (platform::Os::Macos, platform::Arch::Aarch64) => "@oven/bun-darwin-aarch64",
+        (platform::Os::Macos, _) => "@oven/bun-darwin-x64",
+        (platform::Os::Linux, platform::Arch::Aarch64) => "@oven/bun-linux-aarch64",
+        (platform::Os::Linux, _) => "@oven/bun-linux-x64",
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::MirrorMode;
 
-    fn mirror(bun_download: &str, github: &str, mode: MirrorMode) -> MirrorConfig {
-        MirrorConfig {
-            mode,
-            npm: None,
-            cargo: None,
-            nodejs_release: None,
-            bun_download: if bun_download.is_empty() {
-                None
-            } else {
-                Some(bun_download.into())
-            },
-            github: if github.is_empty() {
-                None
-            } else {
-                Some(github.into())
-            },
+    #[test]
+    fn oven_package_covers_full_platform_matrix() {
+        use platform::{Arch, Os};
+        let cases = [
+            ((Os::Windows, Arch::X86_64), "@oven/bun-windows-x64"),
+            ((Os::Windows, Arch::Aarch64), "@oven/bun-windows-aarch64"),
+            ((Os::Windows, Arch::Other), "@oven/bun-windows-x64"),
+            ((Os::Macos, Arch::X86_64), "@oven/bun-darwin-x64"),
+            ((Os::Macos, Arch::Aarch64), "@oven/bun-darwin-aarch64"),
+            ((Os::Linux, Arch::X86_64), "@oven/bun-linux-x64"),
+            ((Os::Linux, Arch::Aarch64), "@oven/bun-linux-aarch64"),
+        ];
+        for ((os, arch), expected) in cases {
+            assert_eq!(oven_package_for(os, arch), expected, "{os:?}/{arch:?}");
         }
-    }
-
-    #[test]
-    fn bun_url_prefers_bun_download() {
-        let url = bun_download_url(&mirror("https://mirror.example/bun", "", MirrorMode::On));
-        assert!(url.starts_with("https://mirror.example/bun/"));
-        assert!(url.ends_with(bun_zip_target()));
-    }
-
-    #[test]
-    fn bun_url_uses_github_proxy_when_bun_download_empty() {
-        let url = bun_download_url(&mirror("", "https://ghproxy.example/", MirrorMode::On));
-        assert!(url.starts_with(
-            "https://ghproxy.example/https://github.com/oven-sh/bun/releases/latest/download/"
-        ));
-    }
-
-    #[test]
-    fn bun_url_falls_back_to_direct_github() {
-        let url = bun_download_url(&mirror("", "", MirrorMode::On));
-        assert_eq!(
-            url,
-            format!(
-                "https://github.com/oven-sh/bun/releases/latest/download/{}",
-                bun_zip_target()
-            )
-        );
-    }
-
-    #[test]
-    fn bun_url_ignores_mirrors_when_off() {
-        let url = bun_download_url(&mirror(
-            "https://mirror.example/bun",
-            "https://ghproxy.example/",
-            MirrorMode::Off,
-        ));
-        assert_eq!(
-            url,
-            format!(
-                "https://github.com/oven-sh/bun/releases/latest/download/{}",
-                bun_zip_target()
-            )
-        );
     }
 }

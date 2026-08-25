@@ -98,33 +98,35 @@ DSHL 是一个轻量的原生启动器（Rust），以 [webui.me](https://webui.
 第一原则：**系统里已有的可用工具原样使用，绝不重装**。
 
 ```mermaid
-flowchart TD
-    P[并发探测 node/bun/pnpm/nub/fnm/cargo/nvm] --> Q{node >= 24.15.0 ?}
-    Q -- "是：零安装，直接使用" --> DONE[运行时就绪]
-    Q -- "缺失或过旧" --> M{pm = "nub" 且<br>mirrors.npm 已配置 ?}
+sequenceDiagram
+    autonumber
+    participant P as ① 并发探测<br/>node/bun/pnpm/nub/fnm/cargo/nvm
+    participant N as ② nub 路线
+    participant F as ③ 回退链
+    participant R as registry（mirrors.npm）
 
-    M -- "是" --> N1["npm 镜像安装 @nubjs/nub<br>→ <cache>/dshl/nub"]
-    N1 --> N2{安装成功?}
-    N2 -- "否" --> H
-    N2 -- "是" --> N3["nub node install 26<br>（NODEJS_ORG_MIRROR）"]
-    N3 --> N4{"nub node which<br>解析到二进制?"}
-    N4 -- "是" --> NDONE[node 目录 = nub 提供 ✓]
-    N4 -- "否" --> H
-
-    M -- "否（未启用镜像）" --> H["fnm → cargo install fnm → nvm<br>→ 自动装 fnm → 手动指引链接"]
-    H --> DONE
-
-    DONE --> PM
-    subgraph PM["包管理器（把 @deepseek-ai/dsh 装进缓存）"]
-        direction LR
-        PN1["pm=nub：nub add（镜像）"] ~~~ PN2["pm=bun：GitHub 镜像下载本体"] ~~~ PN3["pm=pnpm/npm：各自直装"]
+    P->>P: node >= 24.15.0 ?
+    alt 已满足
+        P-->>P: 零安装，原样使用
+    else pm = "nub" 且 mirrors.npm 已配置
+        P->>R: 安装 @nubjs/nub 入 dshl 缓存
+        P->>N: nub node install 26（NODEJS_ORG_MIRROR）
+        N-->>P: nub node which 解析出 node 目录
+        Note over P,F: 安装失败 / 解析不到二进制 → 落入 ③
+    else 未启用镜像
+        P->>F: 直接进入回退链
     end
+    F->>F: fnm → cargo install fnm → nvm<br/>（自动装 fnm → 手动指引链接）
+    Note over P,R: 运行时就绪 —— 第一原则：系统已有的工具绝不重装
+    Note over P,R: 包管理器把 @deepseek-ai/dsh 装进缓存<br/>nub = nub add · bun = @oven 平台包直连 registry · pnpm/npm = 各自直装
 ```
 
 镜像层横切以上所有网络步骤且**只临时注入环境变量/旗标**，从不写全局配置：
-`mirrors.npm` → npm/bun/pnpm/nub 的 registry 与 nub 本体安装；
+`mirrors.npm` → npm/bun/pnpm/nub 的 registry、nub 本体安装，以及 bun 本体
+（与 nub 同路：直接从 registry 拉 `@oven/bun-*` 平台包 tarball，不走 GitHub）；
 `mirrors.nodejs_release` → fnm/nvm/nub 的 Node 发行版下载；
-`mirrors.bun_download`、`mirrors.github` → 各自的下载源。
+`mirrors.github` → 仍走 GitHub 的下载源代理前缀（模板默认 `https://gh-proxy.org/`，
+设空则直连 GitHub）。
 
 **离线与弱网语义**：下载类操作（bun/nub 本体、Node 发行版）全部支持断点续传——
 中断后从已下载的字节继续（curl `-C -` + 自动重试），绝不从头重来；因此安装/下
@@ -240,11 +242,10 @@ fork 上跑 tag 也只会得到 Track A 制品，不会报红。
 auto-mirror = "on"
 
 [mirrors]
-npm            = "http://registry.npmmirror.com"     # bun 也走 npm registry
+npm            = "http://registry.npmmirror.com"     # 包安装与 bun/nub 本体都走这里
 cargo          = "sparse+https://rsproxy.cn/index/"  # 临时使用，仅 CLI
 nodejs-release = "https://mirrors.aliyun.com/nodejs-release/"
-bun-download   = ""                                   # 空 = 不使用
-github         = ""                                   # 代理前缀，如 https://ghproxy.com/
+github         = "https://gh-proxy.org/"             # 模板默认前缀；空 = 直连 github
 
 [dsh]
 flags       = "--profile web --host 127.0.0.1 --port 0"
@@ -256,8 +257,8 @@ single-instance = false   # true = 检测到其他 dsh 实例在运行时拒绝�
 
 [ui]
 mode    = "webview"   # webview | browser（是*偏好*，始终会回退）
-close-to-tray = false # true = 关闭窗口时彻底关窗进托盘（dsh 后台运行），托盘图标重建窗口；Windows/Linux/macOS
-single-instance = false # true = 只允许一个 dshl 实例；第二个实例改为激活已有实例（聚焦或唤出）
+close-to-tray = true  # 默认。关窗进托盘（dsh 后台运行），托盘图标重建窗口；false = 关窗即退出
+single-instance = true # 默认。只允许一个 dshl 实例；第二个实例改为激活已有实例（聚焦或唤出）
 ```
 
 镜像地址为空表示**不使用**该镜像。镜像始终临时生效（环境变量 / CLI 标志），
@@ -294,10 +295,10 @@ dsh 的来源：
 启动的都会命中）；检测到则**拒绝启动**并提示，防止两个进程写同一会话日志造成
 永久损坏。该检查发生在残留进程清理之后，因此自己的旧 dsh 正常退出不算冲突。
 
-### 关闭到托盘（可选）
+### 关闭到托盘
 
-默认关闭窗口即退出（并优雅停止 dsh）。把 `close-to-tray` 设为 `true` 后，
-dsh 已启动时关闭窗口不再退出，dsh 继续在后台运行：
+默认 `close-to-tray = true`：dsh 已启动时关闭窗口不再退出，dsh 继续在后台
+运行（设回 `false` 则恢复「关窗即退」）：
 
 - **窗口会彻底关闭**（WebView2 / WebKitGTK 进程退出，释放内存），只有
   托盘图标、启动器和 dsh 常驻；
@@ -330,7 +331,7 @@ dsh 已启动时关闭窗口不再退出，dsh 继续在后台运行：
 ### 单实例（dshl 互斥，可选）
 
 `[dsh] single-instance` 限制的是 **dsh 本身**；`[ui] single-instance` 限制
-的是 **dshl 启动器**：开启后同一台机器只允许一个 dshl 进程（锁文件 + 内核
+的是 **dshl 启动器**（默认开启）：同一台机器只允许一个 dshl 进程（锁文件 + 内核
 文件锁，进程崩溃自动释放，无陈旧锁问题）。第二个 dshl 启动时不会创建新
 窗口，而是**激活已有实例**后退出：
 
@@ -348,8 +349,8 @@ dsh 已启动时关闭窗口不再退出，dsh 继续在后台运行：
 `<cache>/dshl/dsh.log`，同时捕获 `http://127.0.0.1:<port>` 行）。然后启动器把
 启动窗口路由到该 URL，并**作为 supervisor 常驻**，因此关闭始终干净：
 
-- **关闭显示 dsh 的窗口** → 默认杀掉 dsh 并退出启动器；`close-to-tray`
-  启用时（dsh 已启动）则**进托盘**，dsh 继续后台运行。两种窗口后端都支持：
+- **关闭显示 dsh 的窗口** → `close-to-tray`（默认开）且 dsh 已启动时**进托盘**，
+  dsh 继续后台运行；否则杀掉 dsh 并退出启动器。两种窗口后端都支持：
   - `webview` — 内嵌 WebView（WebView2 / WKWebView / WebKitGTK）。启动器向自己的
     webui 服务端保持一个保活 WebSocket（`multi_client`），使窗口在跳转到 dsh 后仍
     保持打开；通过 webui 的 `set_close_handler_wv`（Windows 上还有窗口句柄）检测

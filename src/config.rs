@@ -49,20 +49,21 @@ pub enum Pm {
 }
 
 /// Domestic mirror addresses. An empty string means "do not use this mirror".
+/// No built-in defaults: an unset mirror is simply unused — the packaged
+/// template carries the recommended values instead.
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Mirrors {
-    /// npm registry (also used by bun's package installs).
+    /// npm registry — package installs AND the bun/nub runtime binary tarballs.
     pub npm: String,
     /// cargo sparse registry index (e.g. `sparse+https://rsproxy.cn/index/`).
     pub cargo: String,
     /// Base URL used by fnm/nvm to download Node releases.
     #[serde(rename = "nodejs-release")]
     pub nodejs_release: String,
-    /// Base URL used to download the bun runtime binary.
-    #[serde(rename = "bun-download")]
-    pub bun_download: String,
-    /// GitHub proxy prefix (e.g. `https://ghproxy.com/`).
+    /// GitHub proxy prefix for downloads that still come from GitHub (the
+    /// fnm release zip). The packaged template ships `https://gh-proxy.org/`;
+    /// set an empty string to reach GitHub directly.
     pub github: String,
 }
 
@@ -157,24 +158,34 @@ pub enum UiMode {
 }
 
 /// `[ui]` section.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Ui {
     /// `webview` / `browser` — a preference, not a hard choice.
     pub mode: UiMode,
-    /// When `true` (Windows only), closing the launcher window hides it to
-    /// the system tray instead of exiting, so dsh keeps running in the
+    /// When `true` (default; Windows only), closing the launcher window hides
+    /// it to the system tray instead of exiting, so dsh keeps running in the
     /// background. Restore from the tray icon; use its menu (or Ctrl+C on
     /// the console) to quit. Ignored on platforms without tray support.
     #[serde(rename = "close-to-tray")]
     pub close_to_tray: bool,
     /// Only allow one dshl instance on this machine (a launcher-level
-    /// mutex, distinct from `[dsh] single-instance` which guards dsh itself).
-    /// When another dshl is already running, this instance does not start:
-    /// it activates the existing one instead — restoring it from the tray
-    /// if it is hidden, or focusing its window if it is visible.
+    /// mutex, distinct from `[dsh] single-instance` which guards dsh itself;
+    /// default `true`). When another dshl is already running, this instance
+    /// does not start: it activates the existing one instead — restoring it
+    /// from the tray if it is hidden, or focusing its window if it is visible.
     #[serde(rename = "single-instance")]
     pub single_instance: bool,
+}
+
+impl Default for Ui {
+    fn default() -> Self {
+        Self {
+            mode: UiMode::Webview,
+            close_to_tray: true,
+            single_instance: true,
+        }
+    }
 }
 
 /// Root configuration.
@@ -300,3 +311,44 @@ pub fn write_template(path: &Path) -> std::io::Result<()> {
 /// The commented default template: the crate-root `dshl.example.toml`,
 /// embedded at compile time so it can never drift from the packaged example.
 pub const DEFAULT_TEMPLATE: &str = include_str!("../dshl.example.toml");
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_defaults_are_tray_and_single_instance() {
+        let ui = Ui::default();
+        assert!(ui.close_to_tray);
+        assert!(ui.single_instance);
+    }
+
+    #[test]
+    fn mirrors_have_no_builtin_defaults() {
+        let m = Mirrors::default();
+        assert!(m.npm.is_empty() && m.cargo.is_empty() && m.nodejs_release.is_empty());
+        assert_eq!(m.github, "");
+    }
+
+    #[test]
+    fn empty_sections_deserialize_to_defaults_and_legacy_keys_are_ignored() {
+        let raw = r#"
+            [mirrors]
+            bun-download = "https://legacy.example/bun"
+
+            [ui]
+        "#;
+        let config: Config = toml::from_str(raw).expect("legacy config must still parse");
+        assert_eq!(config.mirrors.github, "");
+        assert!(config.ui.close_to_tray);
+        assert!(config.ui.single_instance);
+    }
+
+    #[test]
+    fn embedded_default_template_is_valid_config() {
+        let config: Config = toml::from_str(DEFAULT_TEMPLATE).expect("template must parse");
+        assert_eq!(config.mirrors.github, "https://gh-proxy.org/");
+        assert!(config.ui.close_to_tray);
+        assert!(config.ui.single_instance);
+    }
+}

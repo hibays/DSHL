@@ -8,17 +8,16 @@
 auto-mirror = "on"
 
 [mirrors]
-# npm registry (bun installs from npm too, so no separate bun package mirror).
+# npm registry — package installs AND the bun/nub runtime binaries install
+# from here.
 npm = "http://registry.npmmirror.com"
 # cargo sparse index (used temporarily for `cargo install fnm`).
 cargo = "sparse+https://rsproxy.cn/index/"
 # Base URL for downloading Node releases (fnm/nvm).
 nodejs-release = "https://mirrors.aliyun.com/nodejs-release/"
-# Base URL for downloading the bun runtime binary. Empty = use github
-# (through the `github` proxy prefix below when it is set).
-bun-download = ""
-# GitHub proxy prefix. Empty = use github directly.
-github = ""
+# GitHub proxy prefix for release downloads that still come from github
+# (fnm's release zip). Empty = reach github directly.
+github = "https://gh-proxy.org/"
 
 [dsh]
 # Flags forwarded to dsh (boot the web profile on an ephemeral port).
@@ -54,15 +53,15 @@ single-instance = false
 #   browser = prefer external browser, then embedded WebView
 mode = "webview"
 # Close to the system tray instead of exiting (Windows / Linux / macOS).
-#   false (default) = closing the window exits the launcher and stops dsh
-#   true            = closing hides to tray, dsh keeps running in the
-#                     background; restore from the tray icon, quit via its
-#                     menu (or Ctrl+C in a console build).
+#   false          = closing the window exits the launcher and stops dsh
+#   true (default) = closing hides to tray, dsh keeps running in the
+#                    background; restore from the tray icon, quit via its
+#                    menu (or Ctrl+C in a console build).
 close-to-tray = true
 # Only allow one dshl instance on this machine (launcher-level mutex,
 # separate from the [dsh] single-instance option which guards dsh).
-#   false (default) = every dshl process runs independently
-#   true            = a second dshl does not start; it activates the
-#                     existing instance instead (restore from tray if
-#                     hidden, or focus its window if visible)
+#   false          = every dshl process runs independently
+#   true (default) = a second dshl does not start; it activates the
+#                    existing instance instead (restore from tray if
+#                    hidden, or focus its window if visible)
 single-instance = true
