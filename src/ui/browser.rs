@@ -11,7 +11,7 @@
 //! * pid captured: process-alive check decides;
 //! * pid never captured: the `was_shown` latch separates "never connected"
 //!   (show instant) from a reliable close (was_shown, then is_shown false);
-//! * capture retries are throttled to one attempt / 2 s with an 8-attempt
+//! * capture retries are throttled to one attempt / 2 s within an ~80 s
 //!   budget per tray cycle (reset by [`note_window_recreated`]).
 
 use std::sync::Mutex;
@@ -28,6 +28,13 @@ const CAPTURE_ATTEMPTS_LIMIT: u32 = 40;
 const CAPTURE_RETRY_INTERVAL: Duration = Duration::from_secs(2);
 
 static PID: AtomicUsize = AtomicUsize::new(0);
+
+/// Last captured browser pid, kept for teardown even after close-to-tray
+/// forgets the detection pid: Edge startup boost / Chrome background mode
+/// keep the browser main process alive after its last window closes, and
+/// shutdown must still be able to reap that residue. Cleared only on a
+/// kernel reset ([`reset_runtime_state`]).
+static TEARDOWN_PID: AtomicUsize = AtomicUsize::new(0);
 static CHECKED: AtomicBool = AtomicBool::new(false);
 static WAS_SHOWN: AtomicBool = AtomicBool::new(false);
 /// True once the CURRENT window was navigated away from the launcher page to
@@ -70,20 +77,22 @@ pub(crate) fn pid() -> u32 {
     PID.load(Ordering::SeqCst) as u32
 }
 
-/// Current browser pid (0 = none known). Read by shutdown paths that must
-/// close/reap the external browser or persist its window geometry.
+/// Last captured browser pid (0 = none). Unlike the detection state — which
+/// close-to-tray resets for the next window — this survives the forget so
+/// shutdown can still clean up a residue process holding the webui profile.
 pub(crate) fn pid_for_teardown() -> u32 {
-    pid()
+    TEARDOWN_PID.load(Ordering::SeqCst) as u32
 }
 
-/// Reset every piece of browser-lifecycle state for a fresh kernel boot
 /// Reset every piece of browser-lifecycle state for a fresh kernel boot
 /// (called from `state::reset_runtime_state`).
 pub(crate) fn reset_runtime_state() {
     PID.store(0, Ordering::SeqCst);
     CHECKED.store(false, Ordering::SeqCst);
     WAS_SHOWN.store(false, Ordering::SeqCst);
+    NAVIGATED_TO_DSH.store(false, Ordering::SeqCst);
     CAPTURE_ATTEMPTS.store(0, Ordering::SeqCst);
+    TEARDOWN_PID.store(0, Ordering::SeqCst);
     if let Ok(mut g) = LAST_CAPTURE.lock() {
         *g = None;
     }
@@ -91,7 +100,7 @@ pub(crate) fn reset_runtime_state() {
 
 /// A freshly (re-)created browser-mode window: re-arm the shown-latch and
 /// hand the pid capture a fresh retry budget for the new cycle. Called from
-/// `show_window` on success and from `restore_from_tray`'s rebuild path.
+/// `restore_from_tray`'s rebuild path just before it calls `show_window`.
 pub(crate) fn note_window_recreated() {
     CHECKED.store(false, Ordering::SeqCst);
     WAS_SHOWN.store(false, Ordering::SeqCst);
@@ -102,6 +111,9 @@ pub(crate) fn note_window_recreated() {
 /// Record a captured browser pid (from `window::capture_browser_pid`).
 pub(crate) fn set_pid(pid: usize) {
     PID.store(pid, Ordering::SeqCst);
+    if pid != 0 {
+        TEARDOWN_PID.store(pid, Ordering::SeqCst);
+    }
 }
 
 /// Close-to-tray transition: forget the pid and clear every latch so the

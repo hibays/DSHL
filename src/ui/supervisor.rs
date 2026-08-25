@@ -44,17 +44,10 @@ pub fn run_loop() {
     // false and the idempotent `webui::clean()` finalises the teardown).
     let mut alive;
 
-    // the existing shutdown logic. This only controls whether
-    // capture_browser_pid() keeps being called.
-    // Retry budget lives in state so restore_from_tray can reset it per
-    // tray cycle (see BROWSER_CAPTURE_* docs in state.rs).
-
-    // Browser-mode close-detection latch. Lives in `state::BROWSER_WAS_SHOWN`
-    // (not a local) so it can be cleared when the window goes to the tray or
-    // is re-created: a stale "was shown" from the previous window must never
-    // classify a still-connecting restored browser as "browser closed".
-    // Semantics: set whenever `webui::is_shown(WINDOW_ID)` is true; cleared
-    // on close-to-tray transitions and by `restore_from_tray`.
+    // Browser-mode lifecycle state (pid, shown-latch, capture budget,
+    // navigation latch) is private to `super::browser`; `restore_from_tray`
+    // re-arms it per tray cycle via `note_window_recreated`. This loop only
+    // asks `poll_close()` every tick and executes the decision it returns.
     loop {
         alive = webui::wait_async();
 

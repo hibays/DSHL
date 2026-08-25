@@ -86,29 +86,43 @@ pub(crate) fn stop_dsh() {
     super::launch::kill_dsh();
 }
 
-/// Close the external browser process (browser mode only). webui's exit()
-/// does not terminate the external browser it launched, so we close it
-/// explicitly to avoid leaving a stray browser window behind on shutdown.
+/// Close the external browser process webui launched (browser mode only).
+/// webui's exit() does not terminate the external browser it launched, so we
+/// close it explicitly to avoid leaving a stray browser behind on shutdown.
 ///
-/// Windows first asks the browser's own top-level window to close
-/// (`WM_CLOSE`): the scoped, graceful path — the browser reacts exactly as
-/// if the user clicked the window's X, so a single-instance browser (Firefox,
-/// or Chrome when the launcher's window shares a profile process) keeps the
-/// user's other windows and their unsaved state alive. Only when no window
-/// can be found, or the window outlives the close request (e.g. a
-/// beforeunload prompt with nobody left to answer it), do we fall back to the
-/// hard `kill_tree`: a surviving browser process would block clean restarts,
-/// which is the worse failure.
+/// Windows first asks the browser's top-level window to close (`WM_CLOSE`):
+/// the scoped, graceful path — the browser reacts exactly as if the user
+/// clicked the window's X, so a shared browser keeps the user's other
+/// windows and their unsaved state alive. A disappeared window is NOT yet a
+/// disappeared process: Edge startup boost / Chrome background mode keep
+/// the main process alive after its last window closes, invisibly holding
+/// the webui profile dir (which would break the next launch's profile
+/// lock). So whatever is still alive after a bounded post-close grace
+/// period — or that never had a window to close gracefully — falls through
+/// to the hard `kill_tree`. A surviving browser process blocking clean
+/// restarts is the worse failure; killing an already-dead pid (webui's own
+/// exit may have won the race) is skipped by the liveness check.
 pub(crate) fn stop_browser() {
-    if state::IS_BROWSER.load(Ordering::SeqCst) {
-        let pid = super::browser::pid_for_teardown();
-        if pid != 0 {
-            crate::debug::emit(&format!("exit: closing external browser (pid {pid})"));
-            if !close_browser_window_gracefully(pid) {
-                crate::platform::kill_tree(pid);
-            }
-        }
+    let pid = super::browser::pid_for_teardown();
+    if pid == 0 {
+        return;
     }
+    crate::debug::emit(&format!("exit: closing external browser (pid {pid})"));
+    // 3 s grace after a graceful close (beforeunload dialogs hang longer —
+    // those deserve the kill), one immediate recheck when there was no
+    // window at all.
+    let ticks = if close_browser_window_gracefully(pid) {
+        60
+    } else {
+        1
+    };
+    for _ in 0..ticks {
+        if !crate::platform::process_alive(pid) {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    crate::platform::kill_tree(pid);
 }
 
 /// Post `WM_CLOSE` to the pid's visible top-level window and wait a bounded
@@ -171,8 +185,14 @@ pub fn shutdown(webui_running: bool) {
     // Record the browser window's FINAL geometry before anything closes it:
     // webui has no browser-side close hook, and the running sampler can miss
     // the last user move/resize in its final second. WebView mode records at
-    // its close handler instead. No-op outside browser mode / pid==0.
-    super::geometry::remember_by_pid(super::browser::pid_for_teardown());
+    // its close handler instead. Only while a browser window is STILL being
+    // tracked (detection pid != 0): after close-to-tray the detection pid is
+    // forgotten on purpose — the sampler already persisted everything while
+    // the window lived, and querying the older teardown pid there would chase
+    // a dead or, worse, a recycled pid.
+    if super::browser::pid() != 0 {
+        super::geometry::remember_by_pid(super::browser::pid_for_teardown());
+    }
     stop_keepalive();
     if webui_running {
         webui_exit();

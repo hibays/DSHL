@@ -104,8 +104,8 @@ pub(crate) fn capture_browser_pid() {
     });
 }
 
-/// Poll for the external browser window's pid, storing it in
-/// [`state::BROWSER_PID`] once found. `None` when the window server port never
+/// Poll for the external browser window's pid, handing it to
+/// [`super::browser::set_pid`] once found. `None` when the window server port never
 /// got assigned, the polls ran out, or another capture stored a pid first.
 fn locate_browser_pid() -> Option<u32> {
     let window = webui::Window::from_id(state::WINDOW_ID.load(Ordering::SeqCst));
