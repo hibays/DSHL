@@ -1,8 +1,6 @@
 //! Win32 window helpers: geometry capture/clamp, HWND discovery, focus,
 //! liveness and theme application. All FFI goes through `windows-rs`.
 
-use windows::core::BOOL;
-
 fn utf16(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
@@ -228,6 +226,7 @@ pub fn find_visible_window_by_title(needle: &str, exclude_pid: u32) -> Option<(u
         use windows::Win32::UI::WindowsAndMessaging::{
             EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
         };
+        use windows::core::BOOL;
 
         struct Ctx<'a> {
             needle: Vec<u16>,
