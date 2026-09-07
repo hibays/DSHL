@@ -10,35 +10,32 @@ use crate::platform;
 
 use super::stream::run_streaming;
 
-/// Download and extract a zip archive using the platform's built-in tools.
+/// Download and extract a zip archive. The download goes through
+/// [`http_download`] (resumable, retries), then extraction uses the platform's
+/// built-in tools (PowerShell `Expand-Archive` on Windows, `unzip` on Unix).
 pub(crate) async fn download_zip(url: &str, dest_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dest_dir).map_err(|e| Error(e.to_string()))?;
     let tmp = dest_dir.join(".dshl-download.zip");
-    let script = if platform::os() == platform::Os::Windows {
-        format!(
-            "[Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12; \
-             Invoke-WebRequest -Uri '{}' -OutFile '{}'; \
-             Expand-Archive -Path '{}' -DestinationPath '{}' -Force; \
-             Remove-Item '{}' -ErrorAction SilentlyContinue",
-            url,
-            tmp.display(),
-            tmp.display(),
-            dest_dir.display(),
-            tmp.display()
-        )
+    http_download(url, &tmp).await?;
+    let result = if platform::os() == platform::Os::Windows {
+        let mut cmd = platform::shell_command();
+        cmd.arg(format!(
+            "Expand-Archive -Path '{zip}' -DestinationPath '{dest}' -Force",
+            zip = tmp.display(),
+            dest = dest_dir.display(),
+        ));
+        run_streaming(cmd, "extract").await
     } else {
-        format!(
-            "curl -fsSL '{}' -o '{}' && unzip -q -o '{}' -d '{}' && rm -f '{}'",
-            url,
-            tmp.display(),
-            tmp.display(),
-            dest_dir.display(),
-            tmp.display()
-        )
+        let mut cmd = platform::shell_command();
+        cmd.arg(format!(
+            "unzip -q -o '{zip}' -d '{dest}'",
+            zip = tmp.display(),
+            dest = dest_dir.display(),
+        ));
+        run_streaming(cmd, "extract").await
     };
-    let mut cmd = platform::shell_command();
-    cmd.arg(script);
-    run_streaming(cmd, "download").await
+    let _ = std::fs::remove_file(&tmp);
+    result
 }
 
 /// Locate a file named `name` (or with `.exe`) anywhere under `dir`.
