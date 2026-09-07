@@ -39,4 +39,7 @@ pub use paths::{
 };
 pub use process::{dsh_instance_running, find_process_by_cmdline, kill_tree, process_alive};
 pub use theme::{apply_window_theme, is_dark_mode, set_dark_titlebar, set_window_icon};
-pub use window::{WindowRect, find_hwnd_by_pid, focus_window, is_window_alive, window_rect};
+pub use window::{
+    WindowRect, find_hwnd_by_pid, find_visible_window_by_title, focus_window, is_window_alive,
+    window_pid, window_rect,
+};

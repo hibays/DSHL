@@ -94,18 +94,26 @@ pub(super) fn clamp(g: &Geometry) -> (u32, u32, u32, u32) {
 
 /// Apply the saved geometry to a not-yet-shown webui window.
 ///
-/// The stored values are physical pixels (captured by this DPI-aware process),
-/// which WebView windows take directly; external browsers interpret
+/// The stored values are physical pixels (captured by this DPI-aware
+/// process), which WebView windows take directly; external browsers interpret
 /// `--window-size/--window-position` in logical pixels (DIPs), so when the
 /// window is destined for a browser the values are divided by the DPI scale
-/// first. Call BEFORE `show()` / `show_wv()` — webui bakes `win->width/height/
-/// x/y` into the WebView2 creation and the browser command line.
-pub(super) fn apply(window: &webui::Window, to_browser: bool) {
-    let Some(g) = load() else {
-        return;
-    };
+/// first. Call BEFORE `show()` / `show_wv()` — webui bakes `win->width/
+/// height/x/y` into the WebView2 creation and the browser command line.
+///
+/// Returns the APPLIED `(x, y, w, h)` — post-DIVISION logical pixels when
+/// `to_browser`, otherwise raw physical — so callers that need to sync an
+/// external system (e.g. the Chromium profile-placement patch in window.rs)
+/// use exactly the numbers that were just handed to webui. `None` = no store.
+pub(super) fn apply(window: &webui::Window, to_browser: bool) -> Option<(u32, u32, u32, u32)> {
+    let g = load()?;
     let (w, h, x, y) = clamp(&g);
     let scale = crate::platform::dpi_scale();
+    crate::debug::emit(&format!(
+        "geometry apply(to_browser={to_browser}): stored {}x{} @({},{}) scale={scale} \
+         -> applying {}x{} @({},{})",
+        g.width, g.height, g.x, g.y, w, h, x, y
+    ));
     if to_browser && scale > 0.0 {
         window.set_size(
             (w as f64 / scale).round() as u32,
@@ -119,6 +127,16 @@ pub(super) fn apply(window: &webui::Window, to_browser: bool) {
         window.set_size(w, h);
         window.set_position(x, y);
     }
+    Some(if to_browser && scale > 0.0 {
+        (
+            (x as f64 / scale).round() as u32,
+            (y as f64 / scale).round() as u32,
+            (w as f64 / scale).round() as u32,
+            (h as f64 / scale).round() as u32,
+        )
+    } else {
+        (x, y, w, h)
+    })
 }
 
 /// Capture the current rect of a live HWND and persist it. Skips maximized /

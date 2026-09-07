@@ -104,22 +104,14 @@ pub fn run_loop() {
             }
         }
 
-        // Tray "open dsh": bring dsh up in the EXISTING launcher window -
-        // navigate the live one (WebView or the external browser we spawned),
-        // or rebuild it from the tray. NEVER spawn a second default-browser
-        // window via the OS shell: in browser mode THIS window is dsh, and a
-        // second instance defeats the point of the mode.
+        // Tray "open dsh": open the dsh URL via the platform `open_url`
+        // path. This is the historical contract of the menu item — it hands
+        // the URL to the OS, it does not manage launcher windows.
         if tray::open_url_requested()
             && let Some(url) = progress::snapshot().url
+            && let Err(e) = crate::platform::open_url(&url)
         {
-            match state::WINDOW_ID.load(Ordering::SeqCst) {
-                0 => {
-                    // No live window (closed to tray / mid-rebuild): rebuild
-                    // it - restore_from_tray navigates back to the dsh URL.
-                    window::restore_from_tray(false);
-                }
-                _id => window::navigate_when_connected(&url),
-            }
+            crate::debug::emit(&format!("tray open-dsh: open_url failed: {e}"));
         }
 
         // Startup phase: if the window is gone before dsh was handed off,
@@ -149,9 +141,13 @@ pub fn run_loop() {
             } else {
                 browser::Phase::Startup
             };
-            let tick = browser::poll_close(phase, state::WINDOW_ID.load(Ordering::SeqCst), |id| {
-                webui::is_shown(id)
-            });
+            // Presence primitive (HWND liveness) lives inside poll_close —
+            // the tick only supplies the socket signal and window id.
+            let tick = browser::poll_close(
+                phase,
+                state::WINDOW_ID.load(Ordering::SeqCst),
+                webui::is_shown,
+            );
             match tick.action {
                 browser::CloseAction::ToTray => browser_close_enter_tray(),
                 browser::CloseAction::Quit => {
@@ -222,10 +218,9 @@ pub fn run_loop() {
             if state::TRAYED.load(Ordering::SeqCst) {
                 window::restore_from_tray(false);
             } else {
-                let hwnd = state::WEBVIEW_HWND.load(Ordering::SeqCst);
-                if hwnd != 0 {
-                    crate::platform::focus_window(hwnd);
-                }
+                // Backend-aware: browser mode focuses the tracked Edge
+                // window (WEBVIEW_HWND is always zero there).
+                window::focus_current();
             }
         }
 

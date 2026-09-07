@@ -1,9 +1,18 @@
-//! Win32 window helpers: geometry capture, liveness, focus and discovery.
-//!
-//! All Windows calls go through the `windows` crate (windows-rs 0.62).
+//! Win32 window helpers: geometry capture/clamp, HWND discovery, focus,
+//! liveness and theme application. All FFI goes through `windows-rs`.
 
-/// The current geometry of a window, plus whether it is maximized/fullscreen.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+use windows::core::BOOL;
+
+fn utf16(s: &str) -> Vec<u16> {
+    s.encode_utf16().collect()
+}
+
+fn contains_slice(hay: &[u16], needle: &[u16]) -> bool {
+    needle.is_empty() || hay.windows(needle.len()).any(|w| w == needle)
+}
+
+/// A captured window rectangle, in physical pixels.
+#[derive(Debug, Clone, Copy)]
 pub struct WindowRect {
     pub x: i32,
     pub y: i32,
@@ -180,6 +189,89 @@ pub fn find_hwnd_by_pid(pid: u32) -> Option<usize> {
     #[cfg(not(target_os = "windows"))]
     {
         let _ = pid;
+        None
+    }
+}
+
+/// The OS pid that owns `hwnd` right now (0 when the window is gone).
+pub fn window_pid(hwnd: usize) -> u32 {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows::Win32::Foundation::HWND;
+        use windows::Win32::UI::WindowsAndMessaging::GetWindowThreadProcessId;
+        let mut pid: u32 = 0;
+        GetWindowThreadProcessId(HWND(hwnd as *mut _), Some(&mut pid));
+        pid
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = hwnd;
+        0
+    }
+}
+
+/// Find a VISIBLE top-level window whose title contains `needle`
+/// (case-sensitive), excluding windows owned by `exclude_pid`.
+///
+/// This is the browser-tracking anchor: our launcher page has a distinctive
+/// title, and a HWND — unlike a process — cannot be shared with other
+/// webui.me apps, so identity anchored on the window is collision-free.
+///
+/// Other platforms have no HWND evidence and return `None`.
+///
+/// NOTE: currently unused — prepared for a future title-based tracking
+/// path that complements the cmdline-port probe in `window/tracking.rs`.
+pub fn find_visible_window_by_title(needle: &str, exclude_pid: u32) -> Option<(usize, u32)> {
+    #[cfg(target_os = "windows")]
+    unsafe {
+        use windows::Win32::Foundation::{HWND, LPARAM};
+        use windows::Win32::UI::WindowsAndMessaging::{
+            EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+        };
+
+        struct Ctx<'a> {
+            needle: Vec<u16>,
+            exclude_pid: u32,
+            found: Option<(usize, u32)>,
+            _marker: std::marker::PhantomData<&'a ()>,
+        }
+        let mut ctx = Ctx {
+            needle: utf16(needle),
+            exclude_pid,
+            found: None,
+            _marker: std::marker::PhantomData,
+        };
+
+        unsafe extern "system" fn cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
+            // SAFETY: EnumWindows supplies a valid HWND per invocation; the
+            // lparam points at our Ctx, which outlives the enumeration.
+            unsafe {
+                let ctx = &mut *(lparam.0 as *mut Ctx<'static>);
+                if !IsWindowVisible(hwnd).as_bool() {
+                    return BOOL(1);
+                }
+                let mut buf = [0u16; 512];
+                let len = GetWindowTextW(hwnd, &mut buf);
+                let title = &buf[..len as usize];
+                if !contains_slice(title, &ctx.needle) {
+                    return BOOL(1);
+                }
+                let mut pid: u32 = 0;
+                GetWindowThreadProcessId(hwnd, Some(&mut pid));
+                if pid != 0 && pid != ctx.exclude_pid {
+                    ctx.found = Some((hwnd.0 as usize, pid));
+                    return BOOL(0); // stop enumeration
+                }
+                BOOL(1)
+            }
+        }
+
+        let _ = EnumWindows(Some(cb), LPARAM(&mut ctx as *mut _ as isize));
+        ctx.found
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (needle, exclude_pid);
         None
     }
 }

@@ -27,7 +27,11 @@ fn activate_path() -> PathBuf {
 
 /// Try to become the single running instance. Returns `Some(file)` when
 /// this process owns the lock (the file must be kept alive), `None` when
-/// another dshl already holds it.
+/// another dshl already holds it — the caller then signals activation
+/// (focus/restore) instead of reporting an error.
+///
+/// The kernel file lock cannot outlive its holder, so a stale lock from a
+/// crash is impossible; contention therefore always means a live sibling.
 pub fn acquire() -> Option<File> {
     let path = lock_path();
     if let Some(parent) = path.parent() {

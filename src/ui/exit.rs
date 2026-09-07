@@ -101,7 +101,11 @@ pub(crate) fn stop_dsh() {
 /// period — or that never had a window to close gracefully — falls through
 /// to the hard `kill_tree`. A surviving browser process blocking clean
 /// restarts is the worse failure; killing an already-dead pid (webui's own
-/// exit may have won the race) is skipped by the liveness check.
+/// exit may have won the race) is skipped by the liveness check. There is
+/// deliberately NO profile-dir sweep for never-captured sessions: webui
+/// shares ONE `.WebUI` profile dir across every webui.me app on the machine,
+/// so a sweep could kill a foreign app's browser. A missed capture costs a
+/// leftover window the user can close by hand — strictly better.
 pub(crate) fn stop_browser() {
     let pid = super::browser::pid_for_teardown();
     if pid == 0 {
