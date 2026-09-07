@@ -671,7 +671,8 @@ process.exit(1);
 
     #[test]
     fn find_url_captures_token_parameter() {
-        let line = "dsh web: http://127.0.0.1:62420/?token=_R_C_wEEftDf9oFRh4lxVoUxg3kmY_MHaGAn3nKCuVI";
+        let line =
+            "dsh web: http://127.0.0.1:62420/?token=_R_C_wEEftDf9oFRh4lxVoUxg3kmY_MHaGAn3nKCuVI";
         let url = find_url(line).unwrap();
         assert_eq!(
             url,
