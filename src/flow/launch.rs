@@ -43,7 +43,11 @@ pub fn log_path() -> PathBuf {
 
 fn url_regex() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
-    RE.get_or_init(|| Regex::new(r#"https?://[^\s"'<>]+:\d+"#).unwrap())
+    // Match http(s) URLs with a port number AND any trailing query/fragment
+    // (e.g. ?token=...). The `:\d+` anchor avoids matching random HTTP links
+    // in dsh output; the `[^\s"'<>]*` tail preserves query parameters that
+    // carry authentication tokens.
+    RE.get_or_init(|| Regex::new(r#"https?://[^\s"'<>]+:\d+[^\s"'<>]*"#).unwrap())
 }
 
 /// Cap the echoed output tail so a pathological line cannot blow up the
@@ -663,5 +667,26 @@ process.exit(1);
                 "HANG REPRODUCED: silent death without URL never surfaced (elapsed {elapsed:?})"
             ),
         }
+    }
+
+    #[test]
+    fn find_url_captures_token_parameter() {
+        let line = "dsh web: http://127.0.0.1:62420/?token=_R_C_wEEftDf9oFRh4lxVoUxg3kmY_MHaGAn3nKCuVI";
+        let url = find_url(line).unwrap();
+        assert_eq!(
+            url,
+            "http://127.0.0.1:62420/?token=_R_C_wEEftDf9oFRh4lxVoUxg3kmY_MHaGAn3nKCuVI"
+        );
+    }
+
+    #[test]
+    fn find_url_plain_no_token() {
+        let url = find_url("dsh web: http://127.0.0.1:61239").unwrap();
+        assert_eq!(url, "http://127.0.0.1:61239");
+    }
+
+    #[test]
+    fn find_url_skips_non_port_urls() {
+        assert!(find_url("visit https://example.com for details").is_none());
     }
 }
