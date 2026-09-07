@@ -34,7 +34,7 @@ pub fn window_show() -> bool {
         }
         std::thread::sleep(std::time::Duration::from_millis(50));
     };
-    dshl_core::ui::window_show();
+    dshl_core::ui::window_show(dshl_core::ui::launch_flow);
     true
 }
 

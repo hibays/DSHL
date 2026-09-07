@@ -60,8 +60,9 @@ pub(super) fn show_window(
     // browsers interpret --window-position/--window-size in logical pixels
     // (DIPs), so they are divided by the DPI scale first. webui reads these
     // during show(), so this MUST run before it.
-    let apply_geometry =
-        |window: &webui::Window, to_browser: bool| geometry::apply(window, to_browser);
+    let apply_geometry = |window: &webui::Window, to_browser: bool| {
+        let _ = geometry::apply(window, to_browser);
+    };
     apply_geometry(&window, prefer_browser);
 
     // Browser-mode watchdog for the blocking show(). Probe needle is the
@@ -76,112 +77,17 @@ pub(super) fn show_window(
     // for every later restore, so it classifies silently and waits out the
     // natural timeout.
     let allow_interrupt = initial_launch;
-    let allow_fallback = initial_launch;
     if prefer_browser {
-        let window_id = window.id;
-        std::thread::spawn(move || {
-            let window = webui::Window::from_id(window_id);
-
-            // The server assigns its port as soon as it starts listening,
-            // before any browser exists — wait for it, then watch the exact
-            // per-session cmdline.
-            let mut port = 0usize;
-            for _ in 0..20 {
-                if BROWSER_WATCH_STOP.load(Ordering::SeqCst)
-                    || state::SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
-                {
-                    return;
-                }
-                port = window.get_port();
-                if port != 0 {
-                    break;
-                }
-                std::thread::sleep(std::time::Duration::from_millis(300));
-            }
-            if port == 0 {
-                return; // server never started; show() will fail on its own
-            }
-            let needle = format!("--app=http://localhost:{port}");
-
-            let mut misses = 0u32;
-            for _ in 0..100 {
-                if BROWSER_WATCH_STOP.load(Ordering::SeqCst)
-                    || state::SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
-                {
-                    return;
-                }
-                if crate::platform::find_process_by_cmdline(&needle).is_some() {
-                    BROWSER_WATCH_SAW.store(true, Ordering::SeqCst);
-                    misses = 0;
-                } else if BROWSER_WATCH_SAW.load(Ordering::SeqCst) {
-                    misses += 1;
-                    if misses >= 2 {
-                        SPAWNED_BROWSER_GONE.store(true, Ordering::SeqCst);
-                        crate::debug::emit(
-                            "session browser vanished during startup wait (2 consecutive misses)",
-                        );
-                        if allow_interrupt {
-                            crate::debug::emit("interrupting the blocked show via webui::exit()");
-                            webui::exit();
-                        }
-                        return;
-                    }
-                }
-                std::thread::sleep(std::time::Duration::from_millis(300));
-            }
-        });
+        spawn_browser_watchdog(window.id, allow_interrupt);
     }
 
     // `IS_BROWSER` is published by the caller ONLY when `shown` is true: a
     // failed show must leave no backend claim behind (the supervisor reads
     // it and would misjudge a window that does not exist).
     let (shown, actual_browser, window) = if prefer_browser {
-        crate::debug::emit("show_window: calling show (browser mode)");
-        let mut ok = window.show("index.html");
-        BROWSER_WATCH_STOP.store(true, Ordering::SeqCst);
-        if SPAWNED_BROWSER_GONE.load(Ordering::SeqCst) {
-            crate::debug::emit("session browser closed during startup wait");
-            ok = false;
-        }
-        if !ok {
-            // A failed browser show means "no browser window came up" —
-            // clean up and report failure so the caller exits/trays, instead
-            // of silently switching backends. Reap OUR session instance only:
-            // the port needle is unique to this launch, so this can never
-            // touch another webui.me app's browser (no-op once user closed).
-            crate::debug::emit("browser window did not come up; cleaning up");
-            let port = window.get_port();
-            if port != 0 {
-                let needle = format!("--app=http://localhost:{port}");
-                std::thread::spawn(move || {
-                    if let Some(pid) = crate::platform::find_process_by_cmdline(&needle) {
-                        crate::debug::emit(&format!(
-                            "killing leftover browser from the failed show (pid {pid})"
-                        ));
-                        crate::platform::kill_tree(pid);
-                    }
-                });
-            }
-        }
-        (ok, true, window)
+        show_browser(window)
     } else {
-        crate::debug::emit("show_window: calling show_wv (webview mode)");
-        let ok = window.show_wv("index.html");
-        if !ok && allow_fallback {
-            crate::debug::emit("WebView unavailable, falling back to an external browser");
-            let old_id = window.id;
-            state::WINDOW_ID.store(0, Ordering::SeqCst);
-            let window = create_window();
-            apply_geometry(&window, true);
-            let ok = window.show("index.html");
-            std::thread::spawn(move || webui::destroy(old_id));
-            (ok, true, window)
-        } else {
-            if !ok {
-                crate::debug::emit("embedded WebView did not come up");
-            }
-            (ok, false, window)
-        }
+        show_webview(window, initial_launch, &apply_geometry)
     };
 
     if !shown {
@@ -191,7 +97,136 @@ pub(super) fn show_window(
     // The window is really up: publish the decided backend and run the steps
     // that depend on a live window.
     state::IS_BROWSER.store(actual_browser, Ordering::SeqCst);
-    if actual_browser {
+    apply_post_show_state(window, actual_browser, navigate_back);
+    true
+}
+
+/// Spawn the browser vanish watchdog thread. The watchdog polls the
+/// session-unique `--app=http://localhost:<port>` cmdline every 300 ms. If
+/// the browser process disappears (2 consecutive misses after being seen),
+/// it sets `SPAWNED_BROWSER_GONE` and optionally calls `webui::exit()` to
+/// interrupt the blocking `show()` (only when `allow_interrupt` is true,
+/// i.e. initial setup where the whole process will be torn down anyway).
+fn spawn_browser_watchdog(window_id: usize, allow_interrupt: bool) {
+    std::thread::spawn(move || {
+        let window = webui::Window::from_id(window_id);
+
+        // The server assigns its port as soon as it starts listening,
+        // before any browser exists — wait for it, then watch the exact
+        // per-session cmdline.
+        let mut port = 0usize;
+        for _ in 0..20 {
+            if BROWSER_WATCH_STOP.load(Ordering::SeqCst)
+                || state::SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
+            {
+                return;
+            }
+            port = window.get_port();
+            if port != 0 {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        if port == 0 {
+            return; // server never started; show() will fail on its own
+        }
+        let needle = format!("--app=http://localhost:{port}");
+
+        let mut misses = 0u32;
+        for _ in 0..100 {
+            if BROWSER_WATCH_STOP.load(Ordering::SeqCst)
+                || state::SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
+            {
+                return;
+            }
+            if crate::platform::find_process_by_cmdline(&needle).is_some() {
+                BROWSER_WATCH_SAW.store(true, Ordering::SeqCst);
+                misses = 0;
+            } else if BROWSER_WATCH_SAW.load(Ordering::SeqCst) {
+                misses += 1;
+                if misses >= 2 {
+                    SPAWNED_BROWSER_GONE.store(true, Ordering::SeqCst);
+                    crate::debug::emit(
+                        "session browser vanished during startup wait (2 consecutive misses)",
+                    );
+                    if allow_interrupt {
+                        crate::debug::emit("interrupting the blocked show via webui::exit()");
+                        webui::exit();
+                    }
+                    return;
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+    });
+}
+
+/// Show the window in browser mode. Returns `(shown, true, window)`.
+/// On failure, cleans up the leftover browser process (port-needle scoped,
+/// never touches another webui.me app's browser).
+fn show_browser(window: webui::Window) -> (bool, bool, webui::Window) {
+    crate::debug::emit("show_window: calling show (browser mode)");
+    let mut ok = window.show("index.html");
+    BROWSER_WATCH_STOP.store(true, Ordering::SeqCst);
+    if SPAWNED_BROWSER_GONE.load(Ordering::SeqCst) {
+        crate::debug::emit("session browser closed during startup wait");
+        ok = false;
+    }
+    if !ok {
+        // A failed browser show means "no browser window came up" —
+        // clean up and report failure so the caller exits/trays, instead
+        // of silently switching backends. Reap OUR session instance only:
+        // the port needle is unique to this launch, so this can never
+        // touch another webui.me app's browser (no-op once user closed).
+        crate::debug::emit("browser window did not come up; cleaning up");
+        let port = window.get_port();
+        if port != 0 {
+            let needle = format!("--app=http://localhost:{port}");
+            std::thread::spawn(move || {
+                if let Some(pid) = crate::platform::find_process_by_cmdline(&needle) {
+                    crate::debug::emit(&format!(
+                        "killing leftover browser from the failed show (pid {pid})"
+                    ));
+                    crate::platform::kill_tree(pid);
+                }
+            });
+        }
+    }
+    (ok, true, window)
+}
+
+/// Show the window in WebView mode. On failure and when `allow_fallback` is
+/// true, falls back to an external browser. Returns
+/// `(shown, actual_browser, window)`.
+fn show_webview(
+    window: webui::Window,
+    allow_fallback: bool,
+    apply_geometry: &dyn Fn(&webui::Window, bool),
+) -> (bool, bool, webui::Window) {
+    crate::debug::emit("show_window: calling show_wv (webview mode)");
+    let ok = window.show_wv("index.html");
+    if !ok && allow_fallback {
+        crate::debug::emit("WebView unavailable, falling back to an external browser");
+        let old_id = window.id;
+        state::WINDOW_ID.store(0, Ordering::SeqCst);
+        let window = create_window();
+        apply_geometry(&window, true);
+        let ok = window.show("index.html");
+        std::thread::spawn(move || webui::destroy(old_id));
+        (ok, true, window)
+    } else {
+        if !ok {
+            crate::debug::emit("embedded WebView did not come up");
+        }
+        (ok, false, window)
+    }
+}
+
+/// Run the post-show steps that depend on a live window: publish the backend,
+/// start the keep-alive (WebView) or wait for browser connection then
+/// navigate, apply the window theme, and remember the launcher URL.
+fn apply_post_show_state(window: webui::Window, is_browser: bool, navigate_back: Option<String>) {
+    if is_browser {
         browser::note_window_shown();
 
         // Navigate once a client is connected: webui drops a navigate fired
@@ -241,7 +276,6 @@ pub(super) fn show_window(
         }
     }
     remember_launcher_url();
-    true
 }
 
 /// Create the window, register the file handler and bindings, and show it.

@@ -57,14 +57,6 @@ pub(crate) fn shutdown_requested() -> bool {
     state::SHUTDOWN_REQUESTED.load(Ordering::SeqCst)
 }
 
-/// Close the window's keep-alive WebSocket so its webui server can stop. Safe
-/// to call any number of times (the handle is taken once).
-pub(crate) fn stop_keepalive() {
-    if let Some(keepalive) = state::KEEPALIVE.lock().unwrap().take() {
-        keepalive.stop();
-    }
-}
-
 /// webui's universal, cross-platform teardown trigger: closes every window /
 /// browser and stops every server, then makes `webui::wait_async()` return
 /// `false`. Idempotent (a second call is a no-op).
@@ -197,7 +189,7 @@ pub fn shutdown(webui_running: bool) {
     if super::browser::pid() != 0 {
         super::geometry::remember_by_pid(super::browser::pid_for_teardown());
     }
-    stop_keepalive();
+    state::stop_keepalive();
     if webui_running {
         webui_exit();
     }

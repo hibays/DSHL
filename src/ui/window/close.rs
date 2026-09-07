@@ -38,27 +38,16 @@ pub unsafe extern "C" fn on_webview_close(window: usize) -> bool {
         // other platforms have no HWND concept (get_hwnd returns 0) yet
         // still want the close to hand over to the tray.
         if hwnd != 0 || !cfg!(target_os = "windows") {
-            // Stop this window's keep-alive so its webui server can shut down
-            // (the server keeps running while any client is connected). The
-            // window struct itself is freed by the supervisor loop promptly
-            // after this close (see `state::PENDING_DESTROY`), so it is not
-            // held in memory while trayed.
-            if let Some(keepalive) = state::KEEPALIVE.lock().unwrap().take() {
-                keepalive.stop();
-            }
+            // Clear the tracked HWND so the supervisor loop does not mistake
+            // the stale handle for a live window (which would re-trigger tray
+            // mode or shutdown), then enter tray mode right here. The
+            // keep-alive is stopped and PENDING_DESTROY is set inside
+            // `enter_trayed_deferred`; the window struct itself is freed by
+            // the supervisor loop promptly after this close.
+            state::WEBVIEW_HWND.store(0, Ordering::SeqCst);
+            state::enter_trayed_deferred(window);
             tray::start();
             tray::hide_to_tray();
-            // The window is destroyed below; clear the tracked HWND so the
-            // supervisor loop does not mistake the stale handle for a live
-            // window (which would re-trigger tray mode or shutdown), and
-            // enter tray mode right here.
-            state::WEBVIEW_HWND.store(0, Ordering::SeqCst);
-            // Defer the webui struct/server cleanup to the supervisor loop
-            // (never call webui_destroy from inside the close handler — it
-            // would free the window while webui is mid-close).
-            state::PENDING_DESTROY.store(window, Ordering::SeqCst);
-            state::TRAYED.store(true, Ordering::SeqCst);
-            crate::debug::emit("close-to-tray: window closed, dsh keeps running");
             return true;
         }
     }

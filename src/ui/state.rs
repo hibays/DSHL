@@ -93,6 +93,98 @@ pub(crate) fn cli_config_path() -> Option<PathBuf> {
 pub(crate) static CONFIG_PATH: LazyLock<Mutex<Option<PathBuf>>> =
     LazyLock::new(|| Mutex::new(None));
 
+/// Format every runtime flag as a single diagnostic line. Call when the
+/// supervisor looks stuck to get a snapshot of the full UI state without
+/// grepping log lines across four modules.
+pub(crate) fn dump() -> String {
+    format!(
+        "window_id={window_id} trayed={trayed} setup_done={setup_done} \
+         close_pending={close_pending} restoring={restoring} \
+         pending_destroy={pending_destroy} is_browser={is_browser} \
+         webview_hwnd={webview_hwnd:#x} launched={launched} \
+         flow_running={flow_running} shutdown_requested={shutdown_requested} \
+         should_exit={should_exit} close_to_tray={close_to_tray} \
+         crash_gen={crash_gen} restart_requested={restart_requested}",
+        window_id = WINDOW_ID.load(Ordering::SeqCst),
+        trayed = TRAYED.load(Ordering::SeqCst),
+        setup_done = SETUP_DONE.load(Ordering::SeqCst),
+        close_pending = CLOSE_PENDING.load(Ordering::SeqCst),
+        restoring = RESTORING.load(Ordering::SeqCst),
+        pending_destroy = PENDING_DESTROY.load(Ordering::SeqCst),
+        is_browser = IS_BROWSER.load(Ordering::SeqCst),
+        webview_hwnd = WEBVIEW_HWND.load(Ordering::SeqCst),
+        launched = LAUNCHED.load(Ordering::SeqCst),
+        flow_running = FLOW_RUNNING.load(Ordering::SeqCst),
+        shutdown_requested = SHUTDOWN_REQUESTED.load(Ordering::SeqCst),
+        should_exit = SHOULD_EXIT.load(Ordering::SeqCst),
+        close_to_tray = CLOSE_TO_TRAY.load(Ordering::SeqCst),
+        crash_gen = CRASH_GEN.load(Ordering::SeqCst),
+        restart_requested = RESTART_REQUESTED.load(Ordering::SeqCst),
+    )
+}
+
+// ---------------------------------------------------------------------------
+// State transition helpers — single source of truth for flag combinations.
+//
+// Every code path that mutates TRAYED / CLOSE_PENDING / RESTORING /
+// PENDING_DESTROY / KEEPALIVE MUST go through these helpers. This replaces
+// the previous pattern of five independent write-sites each maintaining a
+// slightly different flag combination by convention.
+// ---------------------------------------------------------------------------
+
+/// Stop the window's keep-alive WebSocket so its webui server can shut down.
+/// Safe to call any number of times (the handle is taken once).
+pub(crate) fn stop_keepalive() {
+    if let Some(keepalive) = KEEPALIVE.lock().unwrap().take() {
+        keepalive.stop();
+    }
+}
+
+/// Close-to-tray transition: stop the keep-alive, mark the window as
+/// trayed, and record the window id for deferred destruction by the
+/// supervisor loop. Called from the WebView close handler (which cannot
+/// call `webui::destroy` on the webui event thread).
+///
+/// Does NOT clear `WEBVIEW_HWND` — the supervisor reads it when deciding
+/// whether to focus on restore, and the stale handle is harmless while
+/// trayed (the window is destroyed promptly).
+pub(crate) fn enter_trayed_deferred(window_id: usize) {
+    stop_keepalive();
+    PENDING_DESTROY.store(window_id, Ordering::SeqCst);
+    TRAYED.store(true, Ordering::SeqCst);
+    crate::debug::emit(&format!("state: enter_trayed_deferred (win={window_id})"));
+}
+
+/// Close-to-tray transition with immediate resource cleanup. The caller
+/// (supervisor win_gone or browser_close path) runs on the main thread
+/// and can safely destroy the window / free the HWND.
+pub(crate) fn enter_trayed_now(window_id: usize) {
+    stop_keepalive();
+    PENDING_DESTROY.store(window_id, Ordering::SeqCst);
+    TRAYED.store(true, Ordering::SeqCst);
+    crate::debug::emit(&format!("state: enter_trayed_now (win={window_id})"));
+}
+
+/// Begin a tray-restore rebuild. Returns `true` if the restore can proceed
+/// (the guard was free); `false` if a rebuild is already in progress.
+pub(crate) fn begin_restore() -> bool {
+    !RESTORING.swap(true, Ordering::SeqCst)
+}
+
+/// Finish a failed tray restore: clear the restoring flag and go back to
+/// trayed so the next attempt starts clean. The caller is responsible for
+/// destroying the window and stopping the keep-alive before calling this
+/// (those operations depend on `webui` which this module does not import).
+pub(crate) fn finish_restore_fail() {
+    WINDOW_ID.store(0, Ordering::SeqCst);
+    WEBVIEW_HWND.store(0, Ordering::SeqCst);
+    crate::ui::browser::clear_pid();
+    TRAYED.store(true, Ordering::SeqCst);
+    SETUP_DONE.store(true, Ordering::SeqCst);
+    RESTORING.store(false, Ordering::SeqCst);
+    crate::debug::emit("state: finish_restore_fail");
+}
+
 /// True iff the kernel has finished the startup pipeline and the window is
 /// showing (or has navigated to) the real dsh URL. Exposed as a `pub` query
 /// so `ui` can re-export it via `pub use` (the `state` module itself is
@@ -130,9 +222,7 @@ pub fn reset_runtime_state() {
     CRASH_RESTART_NOW.store(false, Ordering::SeqCst);
     CRASH_NAVIGATE_PENDING.store(false, Ordering::SeqCst);
     RESTART_REQUESTED.store(false, Ordering::SeqCst);
-    if let Some(keepalive) = KEEPALIVE.lock().unwrap().take() {
-        keepalive.stop();
-    }
+    stop_keepalive();
     *CLI_CONFIG_PATH.lock().unwrap() = None;
     *LAUNCHER_URL.lock().unwrap() = String::new();
 }

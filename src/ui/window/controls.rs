@@ -7,13 +7,16 @@ use crate::tray;
 use crate::ui::{browser, state};
 
 use super::{restore_from_tray, setup};
-use crate::ui::launch;
 
 /// Show the launcher window. If the window was trayed, restore it; if it was
 /// never created (kernel boot via the addon track that skipped `setup`), go
 /// through the full setup with the stashed CLI config; otherwise just focus
 /// the existing visible window.
-pub fn show() {
+///
+/// `launch_fn` is called when the window was never created — it typically
+/// triggers the dsh launch pipeline. Injecting it here keeps this module
+/// decoupled from the launch layer.
+pub fn show(launch_fn: impl FnOnce()) {
     if state::TRAYED.load(Ordering::SeqCst) {
         restore_from_tray(false);
     } else if state::WINDOW_ID.load(Ordering::SeqCst) == 0 {
@@ -21,7 +24,7 @@ pub fn show() {
         // SETUP_DONE is false; otherwise we'd build a second window next to
         // the existing one (restore_from_tray above handles the trayed path).
         setup(state::cli_config_path());
-        launch::launch_flow();
+        launch_fn();
     } else {
         // Already visible — focus the CURRENT surface. Browser mode has no
         // WEBVIEW_HWND; without this branch the activation was a silent
@@ -71,15 +74,11 @@ pub fn hide() {
     // picks up PENDING_DESTROY and does the full teardown with tray start.
     let wid = state::WINDOW_ID.load(Ordering::SeqCst);
     if wid != 0 {
-        // Drop the keep-alive (mirrors on_webview_close path) and mark the
-        // window trayed. The supervisor loop will do the actual destroy on
-        // the main thread.
-        if let Some(keepalive) = state::KEEPALIVE.lock().unwrap().take() {
-            keepalive.stop();
-        }
-        state::PENDING_DESTROY.store(wid, Ordering::SeqCst);
-        state::TRAYED.store(true, Ordering::SeqCst);
+        // Drop the tracked HWND so the supervisor does not mistake the stale
+        // handle for a live window, then enter tray mode. The keep-alive is
+        // stopped and PENDING_DESTROY is set inside `enter_trayed_deferred`.
         state::WEBVIEW_HWND.store(0, Ordering::SeqCst);
+        state::enter_trayed_deferred(wid);
         tray::start();
         tray::hide_to_tray();
     }

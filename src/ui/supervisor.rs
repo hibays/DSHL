@@ -22,9 +22,8 @@ use crate::tray;
 /// browser state means updating ONE place, not two diverging copies.
 fn browser_close_enter_tray() {
     crate::debug::emit("close-to-tray: browser window closed, dsh keeps running");
-    state::PENDING_DESTROY.store(state::WINDOW_ID.load(Ordering::SeqCst), Ordering::SeqCst);
+    state::enter_trayed_now(state::WINDOW_ID.load(Ordering::SeqCst));
     browser::note_closed_to_tray();
-    state::TRAYED.store(true, Ordering::SeqCst);
 }
 
 pub fn run_loop() {
@@ -177,13 +176,10 @@ pub fn run_loop() {
             if win_gone && !state::TRAYED.load(Ordering::SeqCst) {
                 if state::CLOSE_TO_TRAY.load(Ordering::SeqCst) {
                     crate::debug::emit("close-to-tray: window gone, dsh keeps running");
-                    if let Some(keepalive) = state::KEEPALIVE.lock().unwrap().take() {
-                        keepalive.stop();
-                    }
-                    state::PENDING_DESTROY
-                        .store(state::WINDOW_ID.load(Ordering::SeqCst), Ordering::SeqCst);
+                    // Clear HWND before entering trayed so the supervisor
+                    // never sees TRAYED=true with a stale handle.
                     state::WEBVIEW_HWND.store(0, Ordering::SeqCst);
-                    state::TRAYED.store(true, Ordering::SeqCst);
+                    state::enter_trayed_now(state::WINDOW_ID.load(Ordering::SeqCst));
                 } else {
                     crate::debug::emit("webview window closed; shutting down");
                     exit::request_shutdown();
@@ -230,6 +226,7 @@ pub fn run_loop() {
     // Composed, cross-platform teardown (see `exit`): stop the keep-alive,
     // webui::exit() to close the window/servers (only when webui is still
     // running), tray shutdown, graceful dsh stop, then webui::clean().
+    crate::debug::emit(&format!("run_loop: state at exit: {}", state::dump()));
     exit::shutdown(alive);
     crate::debug::emit("run_loop: exiting");
 }
