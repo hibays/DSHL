@@ -1,10 +1,12 @@
 //! Win32 window helpers: geometry capture/clamp, HWND discovery, focus,
 //! liveness and theme application. All FFI goes through `windows-rs`.
 
+#[cfg(target_os = "windows")]
 fn utf16(s: &str) -> Vec<u16> {
     s.encode_utf16().collect()
 }
 
+#[cfg(target_os = "windows")]
 fn contains_slice(hay: &[u16], needle: &[u16]) -> bool {
     needle.is_empty() || hay.windows(needle.len()).any(|w| w == needle)
 }
