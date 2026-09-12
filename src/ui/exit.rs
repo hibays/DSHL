@@ -192,6 +192,13 @@ pub fn shutdown(webui_running: bool) {
     state::stop_keepalive();
     if webui_running {
         webui_exit();
+        // After webui_exit() signals the WebView thread to stop, we must
+        // pump webui's wait loop one more time so _webui_wait_clean() runs
+        // on the main thread — that is the only place the C library deletes
+        // the WebView cache folder. Without this, a direct-quit path
+        // (close → shutdown) never reaches _webui_wait_clean and leaves
+        // the cache on disk.
+        while webui::wait_async() {}
     }
     stop_tray();
     stop_dsh();

@@ -156,8 +156,16 @@ pub(crate) async fn http_download(url: &str, dest: &Path) -> Result<()> {
     let mut last: Option<Error> = None;
     for _ in 0..3 {
         let mut cmd = platform::shell_command();
+        // On Windows, PowerShell aliases `curl` to `Invoke-WebRequest`,
+        // which does not understand real curl flags. Use `curl.exe` to
+        // hit the actual binary.
+        let curl = if platform::os() == platform::Os::Windows {
+            "curl.exe"
+        } else {
+            "curl"
+        };
         cmd.arg(format!(
-            "curl -fL -C - --retry 2 --retry-delay 2 -o {q}{dest}{q} {q}{url}{q}",
+            "{curl} -fL -C - --retry 2 --retry-delay 2 -o {q}{dest}{q} {q}{url}{q}",
             q = '"',
             dest = dest.display(),
             url = url

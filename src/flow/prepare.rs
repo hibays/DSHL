@@ -206,8 +206,12 @@ async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> 
 /// no touch of the user's global environment or PATH. Version pinning still
 /// applies to the installed spec, but there is deliberately no version
 /// isolation — one dsh kernel per machine is enough.
+///
+/// The extra `dsh` layer keeps dsh's `node_modules` separate from dshl's own
+/// cache files (icons, logs, lockfiles, window-state) so `rm -rf dsh` is
+/// a clean slate and none of dshl's runtime artefacts are disturbed.
 pub fn dsh_dir() -> std::path::PathBuf {
-    crate::platform::cache_dir().join("dshl")
+    crate::platform::cache_dir().join("dshl").join("dsh")
 }
 
 /// The `.bin` dir of the cache install (holds `dsh`, `dsh.cmd`, …).
