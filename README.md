@@ -277,6 +277,12 @@ dsh 的来源：
 - `private` — 始终装入 dshl 的缓存（`<cache>/dshl/node_modules`），完全不碰
   全局环境与 PATH。
 
+**dshl 自己缓存里的那份 dsh 不算「全局」**：即使你把
+`<cache>/dshl/dsh/node_modules/.bin` 加进 PATH（想在自己的终端里直接用 `dsh`
+时的常见做法），启动器也会跳过它继续沿 PATH 找用户自装的 dsh——那份缓存副本始终
+归 dshl 管理（版本决策、更新与修复都在缓存分支里），`global` 模式则照旧只认你
+自己装的（找不到就报错，并在日志里说明为什么 PATH 上那个 dsh 不算数）。
+
 ### 自动更新
 
 `auto-update`（默认 `true`）在未锁定版本（`version = "latest"`）时让

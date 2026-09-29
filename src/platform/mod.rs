@@ -35,7 +35,7 @@ pub use detect::{
 pub use dpi::{dpi_scale, dpi_scale_for_window, make_dpi_aware, screen_size};
 pub use paths::{
     bin_dir, cache_dir, config_dir, current_exe_dir, default_pnpm_bin_dir, executable_ext,
-    home_dir, known_tool_dirs, tool, tool_in, which, which_in, with_ext,
+    home_dir, known_tool_dirs, tool, tool_in, which, which_all_in, which_in, with_ext,
 };
 pub use process::{dsh_instance_running, find_process_by_cmdline, kill_tree, process_alive};
 pub use theme::{apply_window_theme, is_dark_mode, set_dark_titlebar, set_window_icon};

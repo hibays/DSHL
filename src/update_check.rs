@@ -37,7 +37,6 @@ use crate::config::{Config, DshMode, Pm};
 use crate::flow::prepare;
 use crate::mirror::MirrorConfig;
 use crate::platform;
-use crate::probe;
 use crate::process;
 use crate::progress;
 use crate::version::FullVersion;
@@ -192,8 +191,12 @@ async fn resolve_current(mode: DshMode, prefix: &[PathBuf]) -> Option<FullVersio
 }
 
 /// Version of the user's global `dsh` shell, bounded and failure-tolerant.
+///
+/// Goes through the launch pipeline's probe so "global" means the same thing
+/// in both places: `dsh` copies inside dshl's own cache are skipped, not
+/// reported as the user's global install.
 async fn probe_global(prefix: &[PathBuf]) -> Option<FullVersion> {
-    match tokio::time::timeout(PROBE_TIMEOUT, probe::dsh_in(prefix)).await {
+    match tokio::time::timeout(PROBE_TIMEOUT, prepare::probe_user_global_dsh(prefix)).await {
         Ok(tool) if tool.found => FullVersion::parse(&tool.raw),
         _ => None,
     }

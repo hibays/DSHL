@@ -116,7 +116,35 @@ fn bare_tool(name: &str) -> PathBuf {
 /// flow step (fnm's node bin, pnpm's global bin, …) even when those
 /// directories are not on the ambient `PATH`.
 pub fn which_in(name: &str, extra_dirs: &[PathBuf]) -> Option<PathBuf> {
-    let candidates = if cfg!(target_os = "windows") {
+    candidate_paths(name, extra_dirs).next()
+}
+
+/// Every executable matching `name`, in resolution order (`extra_dirs` first,
+/// then `PATH` plus the well-known tool locations), each reported once.
+///
+/// [`which_in`] answers "what would a spawn resolve to?"; this variant exists
+/// for the callers that must SKIP some of those answers and keep looking — a
+/// `dsh` living inside dshl's own cache is the copy the launcher manages, not
+/// a user-installed global one, so the global check has to walk past it and
+/// see whether a real global install sits further down the `PATH`.
+pub fn which_all_in(name: &str, extra_dirs: &[PathBuf]) -> Vec<PathBuf> {
+    let mut found: Vec<PathBuf> = Vec::new();
+    for full in candidate_paths(name, extra_dirs) {
+        // A directory may appear more than once (an `extra_dir` that is also
+        // on `PATH`); one hit per file keeps the caller's skip log from
+        // repeating itself.
+        if !found.contains(&full) {
+            found.push(full);
+        }
+    }
+    found
+}
+
+/// Candidate paths for `name`, in resolution order, lazily — so [`which_in`]
+/// still stops at the first hit instead of walking the whole `PATH` (an
+/// unresponsive entry on a network drive must not turn a lookup into a stall).
+fn candidate_paths(name: &str, extra_dirs: &[PathBuf]) -> impl Iterator<Item = PathBuf> {
+    let names: Vec<String> = if cfg!(target_os = "windows") {
         vec![
             with_ext(name),
             format!("{name}.cmd"),
@@ -129,15 +157,9 @@ pub fn which_in(name: &str, extra_dirs: &[PathBuf]) -> Option<PathBuf> {
 
     let mut dirs: Vec<PathBuf> = extra_dirs.to_vec();
     dirs.extend(search_dirs());
-    for dir in dirs {
-        for candidate in &candidates {
-            let full = dir.join(candidate);
-            if full.is_file() && is_executable(&full) {
-                return Some(full);
-            }
-        }
-    }
-    None
+    dirs.into_iter()
+        .flat_map(move |dir| names.clone().into_iter().map(move |n| dir.join(n)))
+        .filter(|p| p.is_file() && is_executable(p))
 }
 
 /// Locate an executable by name on `PATH` plus the well-known tool locations.

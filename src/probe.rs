@@ -29,7 +29,7 @@ pub struct Tool {
 }
 
 impl Tool {
-    fn missing(name: &'static str) -> Self {
+    pub(crate) fn missing(name: &'static str) -> Self {
         Self {
             name,
             found: false,
@@ -62,12 +62,21 @@ async fn probe_cmd_in(name: &'static str, version_args: &[&str], extra_dirs: &[P
     let Some(path) = platform::which_in(name, extra_dirs) else {
         return Tool::missing(name);
     };
-    let mut cmd = Command::new(&path);
+    probe_path(name, &path, version_args).await
+}
+
+/// Probe the program at `path` (already resolved by the caller).
+///
+/// Exists for callers that choose among several candidates themselves — the
+/// global-`dsh` check walks past dshl's own cache copies — so the path that
+/// answered `--version` is exactly the path they go on to spawn.
+async fn probe_path(name: &'static str, path: &std::path::Path, version_args: &[&str]) -> Tool {
+    let mut cmd = Command::new(path);
     cmd.args(version_args);
     match process::run_bounded(&mut cmd, PROBE_TIMEOUT).await {
         Ok(res) => tool_from_result(
             name,
-            path,
+            path.to_path_buf(),
             res.success(),
             res.stdout.trim().to_string(),
             res.stderr.trim().to_string(),
@@ -76,7 +85,7 @@ async fn probe_cmd_in(name: &'static str, version_args: &[&str], extra_dirs: &[P
         Err(_) => Tool {
             name,
             found: true,
-            path: Some(path),
+            path: Some(path.to_path_buf()),
             version: None,
             raw: String::new(),
         },
@@ -136,6 +145,12 @@ pub async fn cargo() -> Tool {
     probe_cmd("cargo", &["--version"]).await
 }
 
+/// Probe `dsh` on the ambient PATH.
+///
+/// Answers "what would a spawn resolve to", which INCLUDES the copy dshl
+/// installed into its own cache. Deciding whether the user has a *global* dsh
+/// must go through `flow::prepare::probe_user_global_dsh`, which walks past
+/// those copies (see `dsh_at` for the probe it uses on the one it picked).
 pub async fn dsh() -> Tool {
     probe_cmd("dsh", &["--version"]).await
 }
@@ -143,8 +158,20 @@ pub async fn dsh() -> Tool {
 /// Probe `dsh` searching `extra_dirs` first (the runtime prefix: fnm's node
 /// bin, pnpm's global bin, …), so a just-installed dsh is found even when
 /// its directory is not on the ambient `PATH`.
+///
+/// Same caveat as [`dsh`]: a cache copy is a valid answer here, so it is not
+/// the probe a global/private decision may be based on.
 pub async fn dsh_in(extra_dirs: &[PathBuf]) -> Tool {
     probe_cmd_in("dsh", &["--version"], extra_dirs).await
+}
+
+/// Probe a `dsh` program the caller already resolved to a path.
+///
+/// Used by the global check, which resolves the candidates itself so it can
+/// skip the copies dshl installed into its own cache (see
+/// `flow::prepare::probe_user_global_dsh`) and still probe the one it picked.
+pub async fn dsh_at(path: &std::path::Path) -> Tool {
+    probe_path("dsh", path, &["--version"]).await
 }
 
 /// nvm needs special handling: it is a shell function on Unix and a binary

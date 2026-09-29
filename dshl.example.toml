@@ -35,6 +35,9 @@ version = "latest"
 #   hybrid  = prefer the global dsh, install into dshl's cache when absent
 #             or the pinned version does not match (default)
 #   private = always dshl's private cache install, never touch the global env
+# dshl's OWN cache copy never counts as "global", even when you add its
+# node_modules/.bin to PATH to use dsh in a normal terminal: that copy stays
+# dshl's to install/update/repair, and `global` keeps meaning "installed by you".
 mode = "hybrid"
 # Keep @deepseek-ai/dsh up-to-date automatically.
 #   true  = when `version` is "latest", check for a newer release and update

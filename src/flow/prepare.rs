@@ -120,11 +120,94 @@ fn dsh_version_ok(tool: &probe::Tool, wanted: &str) -> bool {
     installed == wanted_v
 }
 
-/// Probe the user's global `dsh`: ambient PATH first, then the runtime prefix.
-async fn probe_global(runtime: &Runtime) -> probe::Tool {
-    match probe::dsh().await {
-        p if p.found => p,
-        _ => probe::dsh_in(&runtime.path_prefix()).await,
+/// Directories holding dshl's OWN dsh installs. A `dsh` found under one of
+/// them is the launcher's cache copy — never the user's global one.
+///
+/// The scenario this guards: to use `dsh` in a plain terminal, a user adds the
+/// cache's `.bin` (`<cache>/dshl/dsh/node_modules/.bin`) to their PATH. The
+/// global probe would then answer "the user has a global dsh" while what it
+/// found is precisely the copy dshl manages — the timeline mislabels the
+/// source, `dsh.mode = global` accepts a copy it promises never to create, and
+/// the version/repair decision chain that owns that copy is skipped entirely.
+///
+/// `DSHL_CACHE` (sandbox, tests) moves the cache: a leftover copy under the
+/// default location is still dshl's own, so both roots are listed.
+fn dshl_cache_roots() -> Vec<PathBuf> {
+    // `<cache>/dshl` — the launcher's cache tree; `dsh_dir()` sits inside it.
+    let mut roots = vec![crate::platform::cache_dir().join("dshl")];
+    if let Some(home) = crate::platform::home_dir() {
+        let default = home.join(".cache").join("dshl");
+        if !roots.contains(&default) {
+            roots.push(default);
+        }
+    }
+    roots
+}
+
+/// True when `path` lies inside one of `roots`.
+///
+/// Canonicalized where possible, so a symlinked or junctioned spelling of the
+/// cache (macOS `/tmp` → `/private/tmp`, Windows junctions) still matches;
+/// the literal comparison is the fallback for paths that cannot be resolved.
+fn inside_any(path: &std::path::Path, roots: &[PathBuf]) -> bool {
+    let norm = |p: &std::path::Path| std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    let path = norm(path);
+    roots.iter().any(|root| path.starts_with(norm(root)))
+}
+
+/// Every `dsh` program visible to this process, in resolution order: the
+/// ambient PATH first (plus the well-known tool dirs), then `prefix` — where
+/// dshl's own toolchain (fnm's node, pnpm's global bin, …) may hold a dsh the
+/// user installed globally with it.
+///
+/// The two lookups overlap by construction (`prefix` is searched *before* the
+/// ambient PATH, so a PATH hit appears in both); [`pick_global_candidate`]
+/// collapses the repeats.
+fn dsh_candidates(prefix: &[PathBuf]) -> Vec<PathBuf> {
+    let mut candidates = platform::which_all_in("dsh", &[]);
+    candidates.extend(platform::which_all_in("dsh", prefix));
+    candidates
+}
+
+/// Pick the program to treat as "the user's global dsh": the first candidate
+/// that is not one of dshl's own copies, plus the ones skipped for that reason
+/// (the caller logs them), each reported once. Pure, so the PATH-shape rules
+/// stay unit-testable without spawning anything.
+fn pick_global_candidate(
+    candidates: impl IntoIterator<Item = PathBuf>,
+    roots: &[PathBuf],
+) -> (Option<PathBuf>, Vec<PathBuf>) {
+    let mut skipped: Vec<PathBuf> = Vec::new();
+    for path in candidates {
+        if inside_any(&path, roots) {
+            if !skipped.contains(&path) {
+                skipped.push(path);
+            }
+        } else {
+            return (Some(path), skipped);
+        }
+    }
+    (None, skipped)
+}
+
+/// Probe the user's global `dsh`: ambient PATH first, then the runtime prefix,
+/// walking past dshl's own cache copies (see [`dshl_cache_roots`]).
+///
+/// Shared with the background update check so both agree on what "global"
+/// means, and it returns the resolved path in `Tool::path` — the same program
+/// the caller then spawns, so the probed install and the launched one can no
+/// longer diverge.
+pub(crate) async fn probe_user_global_dsh(prefix: &[PathBuf]) -> probe::Tool {
+    let (program, skipped) = pick_global_candidate(dsh_candidates(prefix), &dshl_cache_roots());
+    for path in skipped {
+        progress::log(t!(
+            "flow.prepare.global_skip_cache",
+            path = path.display().to_string()
+        ));
+    }
+    match program {
+        Some(path) => probe::dsh_at(&path).await,
+        None => probe::Tool::missing("dsh"),
     }
 }
 
@@ -141,15 +224,20 @@ fn src_label(global: bool) -> String {
 
 /// Hybrid mode: use the global dsh when it satisfies `version`, else fall
 /// back to a cache install.
-async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> bool {
-    let dsh = probe_global(runtime).await;
-    if !dsh.found {
+///
+/// Returns the program to spawn — `Some` means the global wins, `None` means
+/// the cache branch below does. Resolving the global a second time at spawn
+/// time is how a probe and a launch could end up talking about two different
+/// installs.
+async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> Option<PathBuf> {
+    let dsh = probe_user_global_dsh(&runtime.path_prefix()).await;
+    let Some(program) = dsh.path.clone() else {
         progress::log(t!(
             "flow.prepare.not_installed",
             source = t!("flow.prepare.src_global")
         ));
-        return false;
-    }
+        return None;
+    };
     let src = src_label(true);
     if !config.dsh.wants_latest() {
         // Pinned version: use the global only when it matches.
@@ -159,7 +247,7 @@ async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> 
                 source = src,
                 installed = dsh.raw.trim()
             ));
-            return true;
+            return Some(program);
         }
         progress::log(t!(
             "flow.prepare.version_mismatch",
@@ -167,7 +255,7 @@ async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> 
             wanted = config.dsh.version,
             current = dsh.raw.trim()
         ));
-        return false;
+        return None;
     }
     if !config.dsh.auto_update || target == "latest" {
         // latest, but auto-update is off (or the latest could not be learned)
@@ -177,7 +265,7 @@ async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> 
             source = src,
             installed = dsh.raw.trim()
         ));
-        return true;
+        return Some(program);
     }
     // latest + auto-update: use the global only if it is already up to date;
     // otherwise fall through to a fresh cache install so a stale global dsh
@@ -189,7 +277,7 @@ async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> 
                 source = src,
                 installed = installed.to_string()
             ));
-            true
+            Some(program)
         }
         _ => {
             progress::log(t!(
@@ -198,7 +286,7 @@ async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> 
                 current = dsh.raw.trim(),
                 latest = target.to_string()
             ));
-            false
+            None
         }
     }
 }
@@ -509,121 +597,127 @@ pub async fn run(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> R
     };
 
     // Choose the dsh source according to `dsh.mode` (global / hybrid / private).
-    let mut global = match config.dsh.mode {
-        DshMode::Private => false,
+    // The resolved program IS the decision — `Some` means the user's global dsh
+    // wins, `None` means the cache install below — and it travels with the
+    // log lines above, so the timeline can never describe one install while
+    // launching another.
+    let mut program: Option<PathBuf> = match config.dsh.mode {
+        DshMode::Private => None,
         DshMode::Global => {
-            let dsh = probe_global(runtime).await;
-            if !dsh.found {
+            let dsh = probe_user_global_dsh(&runtime.path_prefix()).await;
+            // No resolved program: nothing global is installed. dshl's own
+            // cache copy does NOT count here — `global` promises a dsh the
+            // user installed themselves (see `dshl_cache_roots`).
+            let Some(path) = dsh.path.clone() else {
                 return Err(crate::error::Error(
                     t!("flow.prepare.global_requires_dsh").to_string(),
                 ));
-            }
+            };
             progress::log(t!(
                 "flow.prepare.installed",
                 source = t!("flow.prepare.src_global"),
                 installed = dsh.raw.trim()
             ));
-            true
+            Some(path)
         }
         DshMode::Hybrid => hybrid_use_global(config, &target, runtime).await,
     };
 
     // A global `dsh` shim can be STALE: its launcher hardcodes an entry path
-    // from the package manager that installed it (e.g. bun's global dir), and
-    // the probe's `--version` may have been answered by a DIFFERENT, working
-    // install earlier/later on PATH. Verify the chosen program actually runs
-    // before trusting it; a broken one degrades to the cache install below.
-    // A global `dsh` shim can be STALE (its launcher hardcodes an entry path
-    // from whichever package manager installed it — e.g. bun's global dir —
-    // while the package itself is gone). Verify the resolved program actually
-    // runs before trusting it; a broken one flips to the cache install below,
-    // which self-heals by installing a fresh dsh and running its real entry.
-    let mut program: Option<PathBuf> = None;
-    if global {
-        let p = platform::which("dsh")
-            .or_else(|| platform::which_in("dsh", &runtime.path_prefix()))
-            .unwrap_or_else(|| PathBuf::from(platform::with_ext("dsh")));
-        if !global_program_usable(&p).await {
+    // from whichever package manager installed it (e.g. bun's global dir)
+    // while the package itself is gone, so `--version` may exit non-zero or
+    // the spawn may die with MODULE_NOT_FOUND. Verify the chosen program
+    // actually runs before trusting it; a broken one flips to the cache
+    // install below, which self-heals by installing a fresh dsh and running
+    // its real node entry.
+    if let Some(p) = program.take() {
+        if global_program_usable(&p).await {
+            program = Some(p);
+        } else {
             progress::log(t!(
                 "flow.prepare.global_broken",
                 path = p.display().to_string()
             ));
-            global = false;
-        } else {
-            program = Some(p);
         }
     }
+    // One fact, not two: a verified program is the only thing that keeps the
+    // global branch alive. Read it before the program is moved into the spawn
+    // below, so the spawn and the PATH injection cannot disagree.
+    let global = program.is_some();
 
-    let mut cmd = if global {
-        // Run the user's global `dsh` directly (dsh / dsh.cmd / dsh.sh),
-        // spawned in a hidden console so no window flashes.
-        let mut c = Command::new(program.expect("global verified above"));
-        c.args(&flags);
-        c
-    } else {
-        // Cache install: decide from the *cached package's* version (not just
-        // its presence) whether an install/update is needed, then run
-        // `node <package-bin-entry>`. The cache probe is logged either way,
-        // so the timeline shows the full global → cache decision chain.
-        let pkg = dsh_pkg_dir();
-        let cached = cached_dsh_version(&pkg);
-        // A parseable manifest without a runnable entry means an interrupted
-        // install: without this check the launcher fails with `entry_missing`
-        // on every start until the cache is deleted by hand.
-        let entry_ok = package_entry(&pkg).is_some();
-        let src = src_label(false);
-        // A pinned `version` is an explicit user request (downgrades
-        // included); a target derived from the registry's `latest` must never
-        // downgrade a newer cache copy.
-        let allow_downgrade = !config.dsh.wants_latest();
-        if cache_needs_install(cached.as_ref(), &target, allow_downgrade, entry_ok) {
-            match &cached {
-                _ if !entry_ok => progress::log(t!("flow.prepare.cache_repair")),
-                Some(v) => progress::log(t!(
-                    "flow.prepare.version_mismatch",
-                    source = src,
-                    wanted = target,
-                    current = v.to_string()
-                )),
-                None => progress::log(t!(
-                    "flow.prepare.not_installed",
-                    source = t!("flow.prepare.src_cache")
-                )),
-            }
-            install_dsh(
-                config,
-                mirror,
-                runtime,
-                &repair_spec(&cached, &target, entry_ok, &spec),
-            )
-            .await?;
-            // The published "有新版本" row is stale now: forget it instead of
-            // claiming an update is still pending until the next tick.
-            crate::update_check::invalidate();
-        } else if let Some(v) = cached {
-            // Cache hit: the installed copy already satisfies the target.
-            progress::log(t!(
-                "flow.prepare.installed",
-                source = src,
-                installed = v.to_string()
-            ));
+    let mut cmd = match program {
+        Some(p) => {
+            // Run the user's global `dsh` directly (dsh / dsh.cmd / dsh.sh),
+            // spawned in a hidden console so no window flashes.
+            let mut c = Command::new(p);
+            c.args(&flags);
+            c
         }
-        // Strict: after a successful install the entry must exist. A fallback
-        // guess here would spawn `node <something wrong>` downstream.
-        let entry = package_entry(&pkg).ok_or_else(|| {
-            crate::error::Error(
-                t!(
-                    "flow.prepare.entry_missing",
-                    dir = pkg.display().to_string()
+        None => {
+            // Cache install: decide from the *cached package's* version (not just
+            // its presence) whether an install/update is needed, then run
+            // `node <package-bin-entry>`. The cache probe is logged either way,
+            // so the timeline shows the full global → cache decision chain.
+            let pkg = dsh_pkg_dir();
+            let cached = cached_dsh_version(&pkg);
+            // A parseable manifest without a runnable entry means an interrupted
+            // install: without this check the launcher fails with `entry_missing`
+            // on every start until the cache is deleted by hand.
+            let entry_ok = package_entry(&pkg).is_some();
+            let src = src_label(false);
+            // A pinned `version` is an explicit user request (downgrades
+            // included); a target derived from the registry's `latest` must never
+            // downgrade a newer cache copy.
+            let allow_downgrade = !config.dsh.wants_latest();
+            if cache_needs_install(cached.as_ref(), &target, allow_downgrade, entry_ok) {
+                match &cached {
+                    _ if !entry_ok => progress::log(t!("flow.prepare.cache_repair")),
+                    Some(v) => progress::log(t!(
+                        "flow.prepare.version_mismatch",
+                        source = src,
+                        wanted = target,
+                        current = v.to_string()
+                    )),
+                    None => progress::log(t!(
+                        "flow.prepare.not_installed",
+                        source = t!("flow.prepare.src_cache")
+                    )),
+                }
+                install_dsh(
+                    config,
+                    mirror,
+                    runtime,
+                    &repair_spec(&cached, &target, entry_ok, &spec),
                 )
-                .to_string(),
-            )
-        })?;
-        let node = platform::tool_in("node", &runtime.path_prefix());
-        let mut c = Command::new(node);
-        c.arg(entry);
-        c.args(&flags);
-        c
+                .await?;
+                // The published "有新版本" row is stale now: forget it instead of
+                // claiming an update is still pending until the next tick.
+                crate::update_check::invalidate();
+            } else if let Some(v) = cached {
+                // Cache hit: the installed copy already satisfies the target.
+                progress::log(t!(
+                    "flow.prepare.installed",
+                    source = src,
+                    installed = v.to_string()
+                ));
+            }
+            // Strict: after a successful install the entry must exist. A fallback
+            // guess here would spawn `node <something wrong>` downstream.
+            let entry = package_entry(&pkg).ok_or_else(|| {
+                crate::error::Error(
+                    t!(
+                        "flow.prepare.entry_missing",
+                        dir = pkg.display().to_string()
+                    )
+                    .to_string(),
+                )
+            })?;
+            let node = platform::tool_in("node", &runtime.path_prefix());
+            let mut c = Command::new(node);
+            c.arg(entry);
+            c.args(&flags);
+            c
+        }
     };
 
     // Inject the resolved toolchain into the dsh process's PATH so it can run
@@ -667,6 +761,65 @@ mod tests {
             !global_program_usable(std::path::Path::new("Z:/definitely/not/a/real/dsh.exe")).await
         );
         let _ = ok;
+    }
+
+    /// The exclusion roots are dshl's cache tree — the one that holds
+    /// `dsh_dir()` (`<cache>/dshl/dsh`), plus the default location when
+    /// `DSHL_CACHE` moved the cache (a leftover copy from a normal run is
+    /// still dshl's own, not a global install).
+    #[test]
+    fn cache_roots_are_the_launcher_cache_tree() {
+        let roots = dshl_cache_roots();
+        assert_eq!(
+            roots.first(),
+            Some(&crate::platform::cache_dir().join("dshl"))
+        );
+        assert!(roots.iter().all(|r| r.ends_with("dshl")));
+        assert!(!roots.is_empty());
+    }
+
+    /// The scenario this whole guard exists for: the user prepends the cache
+    /// install's `.bin` to PATH so `dsh` works in a plain terminal. That copy
+    /// must not be reported as a global install — while a genuine global dsh
+    /// further down the PATH must still be found.
+    #[test]
+    fn global_candidate_skips_dshl_cache_copies() {
+        let tmp = std::env::temp_dir().join(format!("dshl-test-owncache-{}", std::process::id()));
+        let ext = crate::platform::executable_ext();
+        let cache_bin = tmp
+            .join("dshl")
+            .join("dsh")
+            .join("node_modules")
+            .join(".bin");
+        std::fs::create_dir_all(&cache_bin).unwrap();
+        let shim = cache_bin.join(format!("dsh{ext}"));
+        std::fs::write(&shim, "shim").unwrap();
+        let foreign_dir = tmp.join("npm-global");
+        std::fs::create_dir_all(&foreign_dir).unwrap();
+        let foreign = foreign_dir.join(format!("dsh{ext}"));
+        std::fs::write(&foreign, "shim").unwrap();
+        let roots = vec![tmp.join("dshl")];
+
+        // Cache copy first, real global later: keep walking and take the real
+        // one, reporting the skipped copy for the timeline — once, however
+        // often the ambient PATH and the runtime prefix both surface it.
+        let (picked, skipped) =
+            pick_global_candidate(vec![shim.clone(), shim.clone(), foreign.clone()], &roots);
+        assert_eq!(picked, Some(foreign.clone()));
+        assert_eq!(skipped, vec![shim.clone()]);
+
+        // Cache copy only: not a global install at all (hybrid falls through to
+        // the cache branch that manages it; `mode = global` reports it missing).
+        let (picked, skipped) = pick_global_candidate(vec![shim.clone()], &roots);
+        assert_eq!(picked, None);
+        assert_eq!(skipped, vec![shim.clone()]);
+
+        // A foreign install alone is picked, nothing skipped.
+        let (picked, skipped) = pick_global_candidate(vec![foreign.clone()], &roots);
+        assert_eq!(picked, Some(foreign));
+        assert!(skipped.is_empty());
+
+        std::fs::remove_dir_all(&tmp).ok();
     }
 
     /// A repair install must stay on the version already in the cache: an

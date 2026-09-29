@@ -38,3 +38,9 @@
 - clippy -D warnings、workspace 测试全绿；
 - 真机场景（PATH 含 bun 残留壳）由仓库主人复测：第二次及以后的托盘恢复、
   托盘打开 dsh 应导航现有窗口而非新开实例。
+
+## 相关
+
+- `2026-09-29-cache-bin-on-path-is-not-a-global-dsh.md`：把「probe 与 launch
+  同源」从「两处都走 which 语义」推进到字面同源——全局程序由探测结果直接带出，
+  spawn 前不再二次 `which`；同时「全局」不再包含 dshl 自己缓存里的副本。
