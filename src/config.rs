@@ -178,6 +178,62 @@ pub struct Ui {
     pub single_instance: bool,
 }
 
+/// How the launcher treats updates of ITSELF (`[update] self`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "lowercase")]
+pub enum SelfUpdateMode {
+    /// Never check.
+    Off,
+    /// Check and show that a newer launcher exists; the download only happens
+    /// when the user asks for it (the UI button / the control plane).
+    #[default]
+    Notify,
+    /// Check and download automatically (still applied at the next start).
+    Auto,
+}
+
+/// `[update]` section — the launcher's own update handling.
+///
+/// Whatever the mode, a staged update is applied at the START of the next
+/// launcher run, before any child process exists. That is deliberate: the
+/// running launcher owns the `dsh` process (kill-on-close job on Windows,
+/// `PDEATHSIG` on Linux), so swapping the binary under a live session would
+/// either kill dsh or leave it unsupervised. See
+/// `.agents/notes/proposed/architecture/2026-09-22-dshl-hot-self-update.md`
+/// for what a genuinely hot swap would require.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Update {
+    /// `off` / `notify` (default) / `auto`.
+    #[serde(rename = "self")]
+    pub self_update: SelfUpdateMode,
+    /// How often the launcher checks for its own update (hours, default 6;
+    /// `0` disables the timer, leaving only the manual check).
+    #[serde(rename = "interval-hours")]
+    pub interval_hours: u64,
+}
+
+impl Default for Update {
+    fn default() -> Self {
+        Self {
+            self_update: SelfUpdateMode::Notify,
+            interval_hours: 6,
+        }
+    }
+}
+
+impl Update {
+    /// Should the background timer run at all?
+    pub fn background_enabled(&self) -> bool {
+        self.self_update != SelfUpdateMode::Off && self.interval_hours > 0
+    }
+
+    /// The configured cadence, clamped to something sane.
+    pub fn interval(&self) -> std::time::Duration {
+        std::time::Duration::from_secs(self.interval_hours.clamp(1, 24 * 7) * 60 * 60)
+    }
+}
+
 impl Default for Ui {
     fn default() -> Self {
         Self {
@@ -198,6 +254,7 @@ pub struct Config {
     pub mirrors: Mirrors,
     pub dsh: Dsh,
     pub ui: Ui,
+    pub update: Update,
 }
 
 impl Default for Config {
@@ -207,6 +264,7 @@ impl Default for Config {
             mirrors: Mirrors::default(),
             dsh: Dsh::default(),
             ui: Ui::default(),
+            update: Update::default(),
         }
     }
 }
@@ -350,5 +408,37 @@ mod tests {
         assert_eq!(config.mirrors.github, "https://gh-proxy.org/");
         assert!(config.ui.close_to_tray);
         assert!(config.ui.single_instance);
+        // The launcher's own update handling: prompting by default, applied at
+        // the next start (never under a live dsh).
+        assert_eq!(config.update.self_update, SelfUpdateMode::Notify);
+        assert_eq!(config.update.interval_hours, 6);
+        assert!(config.update.background_enabled());
+    }
+
+    #[test]
+    fn update_interval_is_clamped_and_switchable() {
+        let disabled = Update {
+            interval_hours: 0,
+            ..Update::default()
+        };
+        assert!(!disabled.background_enabled());
+        let huge = Update {
+            interval_hours: 10_000,
+            ..Update::default()
+        };
+        assert_eq!(
+            huge.interval(),
+            std::time::Duration::from_secs(24 * 7 * 3600)
+        );
+        let two = Update {
+            interval_hours: 2,
+            ..Update::default()
+        };
+        assert_eq!(two.interval(), std::time::Duration::from_secs(2 * 3600));
+        let off = Update {
+            self_update: SelfUpdateMode::Off,
+            ..Update::default()
+        };
+        assert!(!off.background_enabled());
     }
 }

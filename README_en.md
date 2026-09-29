@@ -69,9 +69,20 @@ managed background thread so the Node event loop stays alive.
   `src/pty/` (`spawn/list/resize/write/kill/server_endpoint`).
 - **Control plane** — the launcher exposes a newline-delimited JSON-RPC
   endpoint on a loopback TCP socket, giving the supervised dsh process native
-  capabilities (shutdown/restart/switch-profile/open-terminal/ping); a random
+  capabilities (shutdown/restart/switch-profile/open-terminal/ping plus the
+  update check/self-update methods); a random
   per-launch token is handed to dsh via the `DSHL_CONTROL_URL` env var. See
   **Control plane** below.
+- **Launcher self-update** (`[update]`) — checks GitHub Releases (through the
+  `mirrors.github` prefix) every `interval-hours` (default 6), downloads the
+  portable archive for this platform on request (`self = "notify"`, the
+  default; `auto` downloads by itself), verifies the release's published
+  SHA-256 and stages it. The swap happens at the START of the next launcher
+  run — after the single-instance lock, before any child process exists — so it
+  can never interrupt a running dsh session; `.app` bundles and cargo build
+  trees are pointed at the download page instead. See
+  `.agents/notes/proposed/architecture/2026-09-22-dshl-hot-self-update.md`
+  for what a genuinely hot swap would require.
 - **Window geometry memory** — a single `<cache>/dshl/window-state.json`
   stores `{x,y,width,height}` (physical pixels) shared by the WebView window
   and the external browser window alike; every value is clamped before being
@@ -288,7 +299,7 @@ github         = "https://gh-proxy.org/"             # template default; empty =
 [dsh]
 flags       = "--profile web --host 127.0.0.1 --port 0"
 mode        = "hybrid"    # global | hybrid | private
-pm          = "npm"       # npm | bun | pnpm
+pm          = "nub"       # nub (default) | npm | bun | pnpm
 version     = "latest"    # "latest" = no suffix, else @deepseek-ai/dsh@<version>
 auto-update = true        # keep @deepseek-ai/dsh up-to-date
 single-instance = false   # true = refuse to start dsh while another dsh is running (no dual-writer)

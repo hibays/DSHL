@@ -15,7 +15,9 @@ use crate::types::{OpenTerminalOptions, PingInfo, PlatformInfo};
 pub fn ping() -> PingInfo {
     PingInfo {
         pong: true,
-        version: env!("CARGO_PKG_VERSION").to_string(),
+        // Build-pinned launcher version (see `dshl_core::version::BUILD_VERSION`)
+        // so every surface — CLI, control plane, plugins — reports one number.
+        version: dshl_core::version::BUILD_VERSION.to_string(),
     }
 }
 

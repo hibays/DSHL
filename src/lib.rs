@@ -21,6 +21,10 @@
 //! - [`ui`]: the window layer (assets, bindings, lifecycle, launch flow,
 //!   supervisor loop).
 //! - [`flow`]: the startup pipeline (prepare → install → launch).
+//! - [`update_check`]: the background "is a newer dsh out?" timer (2h cadence,
+//!   check-only — installation stays in [`flow::prepare`]).
+//! - [`self_update`]: the launcher's own update (check → download → verify →
+//!   stage → swap at the next start; never under a live dsh session).
 //! - everything else: config, mirror resolution, probes, progress, keep-alive.
 
 // Load I18n macro so `t!` is usable crate-wide.
@@ -42,10 +46,12 @@ pub mod progress;
 
 pub mod pty;
 pub mod runtime;
+pub mod self_update;
 #[cfg(test)]
 mod testutil;
 pub mod tray;
 pub mod ui;
+pub mod update_check;
 pub mod version;
 pub mod wskeep;
 

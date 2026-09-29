@@ -24,6 +24,10 @@
 //! - [`download`]: zip download + extraction and small file helpers shared by
 //!   the installers.
 
+use std::path::Path;
+
+use crate::platform;
+
 pub mod bun;
 pub mod download;
 pub mod node;
@@ -38,6 +42,29 @@ pub use nub::ensure_nub;
 pub use pnpm::ensure_pnpm;
 pub use runtime::Runtime;
 pub use stream::run_streaming;
+
+/// True when `dir` holds a runnable `name` in any of the spellings a package
+/// manager may have produced.
+///
+/// The spellings genuinely differ by producer: `npm install` writes shims
+/// (`name.cmd` / `name.ps1` on Windows, a plain symlink named `name`
+/// elsewhere), while a registry tarball drops the native `name.exe` / `name`.
+/// Checking only `name.exe` made a perfectly good npm-installed shim look
+/// missing, which turned a cache hit into a fresh network install on every
+/// start (and, for pnpm, into a hard failure downstream).
+pub(crate) fn bin_in_dir(dir: &Path, name: &str) -> bool {
+    let candidates: Vec<String> = if cfg!(target_os = "windows") {
+        vec![
+            platform::with_ext(name),
+            format!("{name}.cmd"),
+            format!("{name}.bat"),
+            name.to_string(),
+        ]
+    } else {
+        vec![name.to_string()]
+    };
+    candidates.iter().any(|c| dir.join(c).is_file())
+}
 
 /// Minimum Node.js version required by dsh.
 pub const NODE_MIN: crate::version::Version = crate::version::Version::new(24, 15, 0);

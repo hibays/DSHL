@@ -2,7 +2,8 @@
 //! output, plus the shared [`Command`] preparation helpers.
 
 use std::io;
-use std::process::{Command, ExitStatus};
+use std::process::{Command, ExitStatus, Stdio};
+use std::time::Duration;
 
 /// Result of a synchronously captured command.
 #[derive(Debug, Clone)]
@@ -94,4 +95,38 @@ pub async fn run_async(cmd: &mut Command) -> io::Result<CommandResult> {
         stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
         status: Some(output.status),
     })
+}
+
+/// Run a command to completion with a hard deadline, capturing its output.
+///
+/// Probe/verification calls (`tool --version`, registry queries, the global
+/// shim check) are bounded by policy, and a tool that never answers must
+/// neither stall its caller nor leave a process behind — hence the explicit
+/// `kill_on_drop`: when the budget expires the future is dropped and tokio
+/// kills the child, so a repeated check (the 2h update timer, the startup
+/// pipeline) cannot accumulate stuck probes.
+///
+/// A timeout is reported as [`io::ErrorKind::TimedOut`]; callers treat it
+/// exactly like any other probe failure. Install/download commands
+/// deliberately do NOT use this (they are unbounded by design — correctness
+/// comes from `curl -C -` resuming and the tools' own retries).
+pub async fn run_bounded(cmd: &mut Command, budget: Duration) -> io::Result<CommandResult> {
+    let mut tcmd = to_tokio(cmd);
+    tcmd.kill_on_drop(true)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .stdin(Stdio::null());
+    let child = tcmd.spawn()?;
+    match tokio::time::timeout(budget, child.wait_with_output()).await {
+        Ok(Ok(output)) => Ok(CommandResult {
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+            status: Some(output.status),
+        }),
+        Ok(Err(e)) => Err(e),
+        Err(_) => Err(io::Error::new(
+            io::ErrorKind::TimedOut,
+            format!("command did not finish within {budget:?}"),
+        )),
+    }
 }

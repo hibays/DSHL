@@ -97,12 +97,25 @@ function renderConfig(state) {
   try {
     const cfg = JSON.parse(state.config_json || "{}");
     rows = [
-      ["auto-mirror", cfg.auto_mirror],
+      // NOTE: the backend serialises `Config` with serde, and the field is
+      // renamed to kebab-case there (`auto-mirror`) — reading the snake_case
+      // spelling left this row permanently empty.
+      ["auto-mirror", cfg["auto-mirror"]],
       ["dsh.mode", cfg.dsh && cfg.dsh.mode],
       ["dsh.pm", cfg.dsh && cfg.dsh.pm],
       ["dsh.version", cfg.dsh && cfg.dsh.version],
       ["dsh.flags", cfg.dsh && cfg.dsh.flags],
     ];
+    // Background update-check result (localized on the Rust side). The row is
+    // absent until the first check completes — see src/update_check.rs.
+    if (state.update && state.update.text) {
+      rows.push(["update", state.update.text]);
+    }
+    // Launcher self-update state (src/self_update.rs): shows "有新版本",
+    // "已下载，下次启动应用" or "已更新，重启后生效".
+    if (state.self_update && state.self_update.text) {
+      rows.push(["self-update", state.self_update.text]);
+    }
     if (cfg.mirrors) {
       for (const [k, v] of Object.entries(cfg.mirrors)) {
         rows.push([`mirrors.${k}`, v || tr("page.empty_value")]);
@@ -271,6 +284,11 @@ function render(state) {
   // is waiting for the user to decide. Clicking it calls the bound
   // force_kill_stale() backend function — the click IS the confirmation.
   $("btn-force-kill").hidden = !state.stale_pid;
+  // Launcher self-update button: only when there is something to do (a newer
+  // release, a staged one, or one applied that needs a restart). Up to date or
+  // check-failed states stay quiet — the config row explains the situation.
+  const su = state.self_update;
+  $("btn-self-update").hidden = !(su && (su.available || su.staged || su.applied));
   // Manual jump back to the dsh deploy page: available once dsh has
   // reported its URL (e.g. after the user navigated back to this page).
   dshUrl = state.url || "";

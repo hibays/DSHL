@@ -65,3 +65,20 @@ close-to-tray = true
 #                    existing instance instead (restore from tray if
 #                    hidden, or focus its window if visible)
 single-instance = true
+
+[update]
+# How the launcher handles updates of ITSELF (dsh's own updates are governed
+# by [dsh] auto-update above):
+#   off    = never check
+#   notify = check and show that a newer launcher exists; the download happens
+#            only when you click "更新启动器" (default)
+#   auto   = check and download automatically
+# Whatever the mode: a downloaded update is applied at the START of the next
+# dshl run, before any child process exists. It never swaps the program under
+# a live dsh session (that would either kill dsh or leave it unsupervised), so
+# updating the launcher cannot interrupt a running session; the startup page
+# shows "已下载，下次启动应用" until then.
+self = "notify"
+# How often to check for a launcher update, in hours (0 = timer off, the
+# manual check still works). Clamped to 1..=168.
+interval-hours = 6

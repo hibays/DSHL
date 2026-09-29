@@ -3,6 +3,7 @@
 //! proxy prefix logic.
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use crate::error::{Error, Result};
 use crate::mirror::MirrorConfig;
@@ -17,11 +18,23 @@ pub(crate) async fn download_zip(url: &str, dest_dir: &Path) -> Result<()> {
     std::fs::create_dir_all(dest_dir).map_err(|e| Error(e.to_string()))?;
     let tmp = dest_dir.join(".dshl-download.zip");
     http_download(url, &tmp).await?;
-    let result = if platform::os() == platform::Os::Windows {
+    let result = extract_zip(&tmp, dest_dir).await;
+    let _ = std::fs::remove_file(&tmp);
+    result
+}
+
+/// Extract an already-downloaded zip into `dest_dir`.
+///
+/// Split out of [`download_zip`] so a caller that must VERIFY the archive
+/// before trusting its contents (the self-update path checks the release's
+/// published SHA-256 first) does not have to download it twice.
+pub(crate) async fn extract_zip(zip: &Path, dest_dir: &Path) -> Result<()> {
+    std::fs::create_dir_all(dest_dir).map_err(|e| Error(e.to_string()))?;
+    if platform::os() == platform::Os::Windows {
         let mut cmd = platform::shell_command();
         cmd.arg(format!(
             "Expand-Archive -Path '{zip}' -DestinationPath '{dest}' -Force",
-            zip = tmp.display(),
+            zip = zip.display(),
             dest = dest_dir.display(),
         ));
         run_streaming(cmd, "extract").await
@@ -29,13 +42,11 @@ pub(crate) async fn download_zip(url: &str, dest_dir: &Path) -> Result<()> {
         let mut cmd = platform::shell_command();
         cmd.arg(format!(
             "unzip -q -o '{zip}' -d '{dest}'",
-            zip = tmp.display(),
+            zip = zip.display(),
             dest = dest_dir.display(),
         ));
         run_streaming(cmd, "extract").await
-    };
-    let _ = std::fs::remove_file(&tmp);
-    result
+    }
 }
 
 /// Locate a file named `name` (or with `.exe`) anywhere under `dir`.
@@ -152,20 +163,18 @@ pub(crate) fn registry_base(mirror: &MirrorConfig) -> String {
 /// Resumable HTTP(S) download: `-C -` continues an existing partial file and
 /// the retry loop keeps trying up to three times. A failed resume drops the
 /// partial so the next attempt starts clean instead of failing forever.
+///
+/// Deliberately UNBOUNDED: every caller is an install/download, whose
+/// correctness comes from resuming plus the tool's own retries. Probe-class
+/// fetches use [`http_get_text_bounded`] instead.
 pub(crate) async fn http_download(url: &str, dest: &Path) -> Result<()> {
+    ensure_safe_url(url)?;
     let mut last: Option<Error> = None;
     for _ in 0..3 {
         let mut cmd = platform::shell_command();
-        // On Windows, PowerShell aliases `curl` to `Invoke-WebRequest`,
-        // which does not understand real curl flags. Use `curl.exe` to
-        // hit the actual binary.
-        let curl = if platform::os() == platform::Os::Windows {
-            "curl.exe"
-        } else {
-            "curl"
-        };
         cmd.arg(format!(
             "{curl} -fL -C - --retry 2 --retry-delay 2 -o {q}{dest}{q} {q}{url}{q}",
+            curl = curl_program(),
             q = '"',
             dest = dest.display(),
             url = url
@@ -183,11 +192,85 @@ pub(crate) async fn http_download(url: &str, dest: &Path) -> Result<()> {
 
 /// Plain-text GET via curl (small JSON documents like `/latest`).
 pub(crate) async fn http_get_text(url: &str) -> Result<String> {
-    let tmp = std::env::temp_dir().join(format!("dshl-get-{}", std::process::id()));
+    let tmp = temp_path();
     http_download(url, &tmp).await?;
-    let text = std::fs::read_to_string(&tmp).map_err(|e| Error(e.to_string()))?;
-    let _ = std::fs::remove_file(&tmp);
-    Ok(text)
+    read_and_remove(&tmp)
+}
+
+/// Plain-text GET with a hard deadline (probe class: release metadata).
+///
+/// The deadline is enforced twice on purpose — `--max-time` inside curl and a
+/// killed child through [`crate::process::run_bounded`] — so a wedged
+/// connection can neither hang the caller nor leave a process behind.
+pub(crate) async fn http_get_text_bounded(url: &str, budget: Duration) -> Result<String> {
+    ensure_safe_url(url)?;
+    let tmp = temp_path();
+    let mut cmd = platform::shell_command();
+    cmd.arg(format!(
+        "{curl} -fsSL --max-time {secs} -o {q}{dest}{q} {q}{url}{q}",
+        curl = curl_program(),
+        secs = budget.as_secs().max(1),
+        q = '"',
+        dest = tmp.display(),
+        url = url
+    ));
+    let res = crate::process::run_bounded(&mut cmd, budget + Duration::from_secs(2)).await;
+    match res {
+        Ok(r) if r.success() => read_and_remove(&tmp),
+        Ok(r) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(Error(format!("GET {url} failed (exit {:?})", r.code())))
+        }
+        Err(e) => {
+            let _ = std::fs::remove_file(&tmp);
+            Err(Error(e.to_string()))
+        }
+    }
+}
+
+/// Real curl. On Windows, PowerShell aliases `curl` to `Invoke-WebRequest`,
+/// which does not understand curl flags — use `curl.exe` to hit the binary.
+fn curl_program() -> &'static str {
+    if platform::os() == platform::Os::Windows {
+        "curl.exe"
+    } else {
+        "curl"
+    }
+}
+
+/// A unique scratch path: keying on the PID alone collided when two queries
+/// ran in one process, and could resume a stale file from an earlier run.
+fn temp_path() -> PathBuf {
+    std::env::temp_dir().join(format!("dshl-get-{}", uuid::Uuid::new_v4().simple()))
+}
+
+/// Reject a URL that cannot be interpolated into a shell command line safely.
+///
+/// The download layer builds `curl … "<url>"` strings, and the self-update path
+/// feeds a URL that came from a REMOTE JSON document (a release feed, read
+/// through a third-party proxy) — so the character set is validated instead of
+/// trusting the source. Quotes, the PowerShell escape character, `$`
+/// (PowerShell variable), backslash and control/space characters are refused;
+/// `&`, `%` and friends stay allowed because they are literal inside the
+/// quoted argument both `powershell` and `cmd` receive.
+fn ensure_safe_url(url: &str) -> Result<()> {
+    let scheme_ok = url.starts_with("https://") || url.starts_with("http://");
+    let clean = !url.is_empty()
+        && url.len() < 2048
+        && url
+            .chars()
+            .all(|c| c.is_ascii_graphic() && !matches!(c, '"' | '\'' | '`' | '$' | '\\'));
+    if scheme_ok && clean {
+        Ok(())
+    } else {
+        Err(Error(t!("install.download.bad_url", url = url).to_string()))
+    }
+}
+
+fn read_and_remove(path: &Path) -> Result<String> {
+    let text = std::fs::read_to_string(path).map_err(|e| Error(e.to_string()));
+    let _ = std::fs::remove_file(path);
+    text
 }
 
 /// Pull the first `"key": "value"` string out of a small flat JSON document
@@ -244,4 +327,32 @@ pub(crate) async fn fetch_package_extracted(
 
 fn short_name(name: &str) -> String {
     name.rsplit('/').next().unwrap_or(name).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The download layer interpolates URLs into shell command lines, and the
+    /// self-update path feeds one that came from a remote document — so the
+    /// character set is validated, not trusted.
+    #[test]
+    fn url_guard_rejects_shell_metacharacters() {
+        assert!(ensure_safe_url("https://github.com/a/b.zip").is_ok());
+        assert!(ensure_safe_url("http://registry.npmmirror.com/@nubjs%2Fnub/latest").is_ok());
+        // A quoted argument with a query string is still one argument.
+        assert!(ensure_safe_url("https://x.test/a?b=c&d=e").is_ok());
+        for bad in [
+            "",
+            "file:///etc/passwd",
+            "https://x.test/a\"; rm -rf /; \"",
+            "https://x.test/a'$(id)'",
+            "https://x.test/a`id`",
+            "https://x.test/a\\b",
+            "https://x.test/a b",
+            "https://x.test/a\nb",
+        ] {
+            assert!(ensure_safe_url(bad).is_err(), "{bad} must be refused");
+        }
+    }
 }

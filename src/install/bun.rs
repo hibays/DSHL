@@ -19,7 +19,9 @@ use crate::process;
 use crate::progress;
 
 use super::BUN_MIN;
+use super::bin_in_dir;
 use super::download;
+use super::runtime::Runtime;
 use super::stream::run_streaming;
 
 /// Session-level negative cache (same rationale as nub's): once a full
@@ -27,7 +29,15 @@ use super::stream::run_streaming;
 /// doomed install added seconds of perceived launch delay to every boot.
 static INSTALL_FAILED: AtomicBool = AtomicBool::new(false);
 /// Ensure bun is installed when the config requires it.
-pub async fn ensure_bun(config: &Config, mirror: &MirrorConfig) -> Result<Option<PathBuf>> {
+///
+/// `node_dir` is the node the caller resolved (it may be one dshl installed
+/// into its own cache, i.e. NOT on the ambient PATH): the npm fallback below
+/// both resolves `npm` through it and prepends it to the child's PATH.
+pub async fn ensure_bun(
+    config: &Config,
+    mirror: &MirrorConfig,
+    node_dir: &Path,
+) -> Result<Option<PathBuf>> {
     if !config.dsh.needs_bun() {
         return Ok(None);
     }
@@ -61,7 +71,7 @@ pub async fn ensure_bun(config: &Config, mirror: &MirrorConfig) -> Result<Option
             .join("node_modules")
             .join(".bin"),
     ] {
-        if dir.join(platform::with_ext("bun")).is_file() {
+        if bin_in_dir(&dir, "bun") {
             progress::log(t!("install.bun.cached", dir = dir.display()));
             return Ok(Some(dir));
         }
@@ -79,7 +89,7 @@ pub async fn ensure_bun(config: &Config, mirror: &MirrorConfig) -> Result<Option
     if INSTALL_FAILED.load(Ordering::Relaxed) {
         return Err(Error(t!("install.bun.failed").to_string()));
     }
-    match install_bun(mirror).await {
+    match install_bun(mirror, node_dir).await {
         Ok(dir) => Ok(Some(dir)),
         Err(e) => {
             INSTALL_FAILED.store(true, Ordering::Relaxed);
@@ -88,7 +98,7 @@ pub async fn ensure_bun(config: &Config, mirror: &MirrorConfig) -> Result<Option
     }
 }
 
-async fn install_bun(mirror: &MirrorConfig) -> Result<PathBuf> {
+async fn install_bun(mirror: &MirrorConfig, node_dir: &Path) -> Result<PathBuf> {
     let install_dir = platform::cache_dir().join("bun");
     let bin = install_dir.join("bin");
     std::fs::create_dir_all(&install_dir).map_err(|e| Error(e.to_string()))?;
@@ -130,14 +140,27 @@ async fn install_bun(mirror: &MirrorConfig) -> Result<PathBuf> {
     progress::log(t!("install.bun.script_failed"));
     let npm_prefix = crate::platform::cache_dir().join("dshl").join("bun-npm");
     std::fs::create_dir_all(&npm_prefix).ok();
-    let mut npm = Command::new(platform::tool("npm"));
+    // Resolve npm through `node_dir` and hand it to the child as PATH: when
+    // node came from dshl's cache (fnm install) neither the lookup nor the
+    // install would find npm otherwise — this fallback exists precisely for
+    // machines where the other tiers failed.
+    let node_dirs = [node_dir.to_path_buf()];
+    let rt = Runtime {
+        node_dir: Some(node_dir.to_path_buf()),
+        bun_dir: None,
+        extra_path: Vec::new(),
+    };
+    let mut npm = Command::new(platform::tool_in("npm", &node_dirs));
     npm.args(["install", "--prefix"]);
     npm.arg(&npm_prefix);
     npm.args(["--no-save", "bun"]);
+    npm.env("PATH", rt.augmented_path());
     process::with_env(&mut npm, &mirror.npm_env());
     run_streaming(npm, "npm install bun").await?;
     let bin = npm_prefix.join("node_modules").join(".bin");
-    if bin.join(platform::with_ext("bun")).is_file() {
+    // npm writes a `.cmd` shim on Windows, not `bun.exe` — checking only the
+    // `.exe` spelling made a successful install look like a failure.
+    if bin_in_dir(&bin, "bun") {
         return Ok(bin);
     }
 

@@ -66,7 +66,9 @@ A tiny newline-delimited JSON protocol over a single loopback TCP socket:
   re-authenticates each new socket with the hello handshake).
 
 Server-side methods dispatched by the launcher (`src/control.rs`):
-`ping`, `shutdown`, `switch-profile`, `open-terminal`, `restart`;
+`ping`, `shutdown`, `switch-profile`, `open-terminal`, `restart`,
+`update-status`, `check-update`, `self-update-status`, `check-self-update`,
+`download-self-update`, `self-update-action`;
 anything else is answered with an error.
 
 ## Configuration

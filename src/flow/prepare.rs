@@ -18,6 +18,9 @@ use crate::process;
 use crate::progress::{self, StepStatus};
 use crate::version::FullVersion;
 
+/// Budget for the "is the resolved global `dsh` actually runnable?" check.
+const GLOBAL_CHECK_TIMEOUT: Duration = Duration::from_secs(15);
+
 /// Split a flag string the way a shell would (quotes and backslashes).
 pub fn split_args(input: &str) -> Vec<String> {
     let mut args = Vec::new();
@@ -200,12 +203,13 @@ async fn hybrid_use_global(config: &Config, target: &str, runtime: &Runtime) -> 
     }
 }
 
-/// dshl's cache install of dsh: `<cache>/dshl`. dsh is a node module, so the
-/// `--prefix` install drops it straight into `<cache>/dshl/node_modules` (the
-/// package entry at `@deepseek-ai/dsh`) — no extra per-version directory and
-/// no touch of the user's global environment or PATH. Version pinning still
-/// applies to the installed spec, but there is deliberately no version
-/// isolation — one dsh kernel per machine is enough.
+/// dshl's cache install of dsh: `<cache>/dshl/dsh`. dsh is a node module, so
+/// the `--prefix` install drops it straight into
+/// `<cache>/dshl/dsh/node_modules` (the package entry at `@deepseek-ai/dsh`) —
+/// no extra per-version directory and no touch of the user's global
+/// environment or PATH. Version pinning still applies to the installed spec,
+/// but there is deliberately no version isolation — one dsh kernel per machine
+/// is enough.
 ///
 /// The extra `dsh` layer keeps dsh's `node_modules` separate from dshl's own
 /// cache files (icons, logs, lockfiles, window-state) so `rm -rf dsh` is
@@ -258,23 +262,53 @@ fn cached_dsh_version(pkg: &std::path::Path) -> Option<FullVersion> {
     FullVersion::parse(json.get("version")?.as_str()?)
 }
 
+/// Version of the dsh copy in dshl's cache — the one the launcher would run
+/// (and the one an update would replace). Used by the background update check.
+pub(crate) fn cached_version() -> Option<FullVersion> {
+    cached_dsh_version(&dsh_pkg_dir())
+}
+
 /// Should the cache install be refreshed to reach `target`?
 ///
-/// Pure decision over (cached version, target spec) so it stays unit-testable:
+/// Pure decision over (cached version, target spec, policy, tree health) so it
+/// stays unit-testable:
 /// * target `latest`: any usable cache entry passes — the registry may have a
 ///   newer release, but re-installing on every start would hit the network
 ///   each launch; auto-update only moves the cache when the *global* probe
 ///   already forced this code path.
 /// * pinned target: refresh unless the cached version equals it exactly.
-fn cache_needs_install(cached: Option<&FullVersion>, target: &str) -> bool {
-    match cached {
-        None => true, // nothing usable in the cache
-        Some(_) if target == "latest" || target.is_empty() => false,
-        Some(v) => match FullVersion::parse(target) {
-            // Can't parse the request; keep what we have rather than churn.
-            None => false,
-            Some(wanted) => *v != wanted,
-        },
+/// * `allow_downgrade == false` (the target came from the registry's `latest`
+///   dist-tag rather than from a user pin): a cache that is NEWER than
+///   `latest` is kept. Dist-tags do move backwards — dsh's own `latest` went
+///   from `0.1.6-alpha.2` back to `0.1.5-rc.2` — and silently downgrading into
+///   a tree a running dsh executes from is precisely how the "update is
+///   locked" failures started (the retry repeats on every launch, because a
+///   failed install does not change the version it compares).
+/// * `entry_ok == false`: the tree is broken. An interrupted install can leave
+///   a parseable `package.json` without the `bin` entry, which used to fail
+///   with `entry_missing` on every single launch until the user deleted the
+///   cache by hand — so a missing entry always forces a repair install.
+fn cache_needs_install(
+    cached: Option<&FullVersion>,
+    target: &str,
+    allow_downgrade: bool,
+    entry_ok: bool,
+) -> bool {
+    if !entry_ok {
+        return true; // broken tree: repair rather than fail forever
+    }
+    let Some(cached) = cached else {
+        return true; // nothing usable in the cache
+    };
+    if target == "latest" || target.is_empty() {
+        return false;
+    }
+    match FullVersion::parse(target) {
+        // Can't parse the request; keep what we have rather than churn.
+        None => false,
+        // Same version: nothing to do. Older: update. Newer: only an explicit
+        // pin may downgrade (see the doc comment above).
+        Some(wanted) => *cached != wanted && (allow_downgrade || *cached < wanted),
     }
 }
 
@@ -320,16 +354,21 @@ async fn install_dsh(
         dir = dir.display().to_string()
     ));
 
+    // Resolve the package manager through the runtime prefix first: dshl may
+    // have installed it itself (a cached nub/pnpm/bun is not on the ambient
+    // PATH), and the bare-name fallback cannot save us there — on Windows it
+    // degrades to `nub.cmd`, which no registry tarball ever contains.
+    let pm_bin = platform::tool_in(pm, &runtime.path_prefix());
     let mut cmd = match config.dsh.pm {
         Pm::Npm => {
-            let mut c = Command::new(platform::tool("npm"));
+            let mut c = Command::new(&pm_bin);
             c.args(["install", "--prefix"]);
             c.arg(&dir);
             c.args(["--no-save", spec]);
             c
         }
         Pm::Bun => {
-            let mut c = Command::new(platform::tool("bun"));
+            let mut c = Command::new(&pm_bin);
             c.arg("add");
             c.arg("--cwd");
             c.arg(&dir);
@@ -337,7 +376,7 @@ async fn install_dsh(
             c
         }
         Pm::Pnpm => {
-            let mut c = Command::new(platform::tool("pnpm"));
+            let mut c = Command::new(&pm_bin);
             c.arg("add");
             c.arg("--dir");
             c.arg(&dir);
@@ -347,7 +386,7 @@ async fn install_dsh(
         // nub add has no --cwd/--dir flag (verified against 0.7.5 help):
         // run it with the cache dir as the working directory instead.
         Pm::Nub => {
-            let mut c = Command::new(platform::tool("nub"));
+            let mut c = Command::new(&pm_bin);
             c.arg("add");
             c.arg(spec);
             c.current_dir(&dir);
@@ -361,46 +400,25 @@ async fn install_dsh(
 
 /// Query the latest published `@deepseek-ai/dsh` version (best-effort).
 ///
-/// Runs on the tokio runtime with a 5-second cap so a slow/offline registry
-/// never stalls the startup pipeline. The query uses the configured package
-/// manager (`npm view` / `pnpm view`); bun has no reliable `view`/publish
-/// query outside a project directory, so `npm view` is used there — npm
-/// ships with node (always present) and reads the same user npmrc as bun.
-/// Returns `None` on any failure.
+/// Thin wrapper over [`crate::update_check::query_latest`] so the startup path
+/// and the 2-hour background timer share one implementation (and one 3-second
+/// cap). Returns `None` on any failure, which the caller turns into "keep what
+/// we have" — or into the timer's last known answer (see below).
 async fn query_latest_version(
     config: &Config,
     mirror: &MirrorConfig,
     runtime: &Runtime,
 ) -> Option<FullVersion> {
-    let env = mirror.npm_env();
-    let path = runtime.augmented_path();
-    let tool = match config.dsh.pm {
-        // nub exposes `view` too, but npm is always present and reads the
-        // same registry config — keep the query on the proven path.
-        Pm::Npm | Pm::Bun => "npm",
-        // nub has a native `view` (registry query) - use the configured PM.
-        Pm::Nub => "nub",
-        Pm::Pnpm => "pnpm",
-    };
-    let mut cmd = Command::new(platform::tool(tool));
-    cmd.args(["view", "@deepseek-ai/dsh", "version"]);
-    cmd.env("PATH", path);
-    process::with_env(&mut cmd, &env);
-    // npm view normally answers in ~1s; the timeout caps a slow/blocked
-    // registry so the startup page is not held on a stall.
-    let Ok(Ok(res)) =
-        tokio::time::timeout(Duration::from_secs(3), process::run_async(&mut cmd)).await
-    else {
-        return None;
-    };
-    if res.success() {
-        FullVersion::parse(res.stdout.trim())
-    } else {
-        None
-    }
+    crate::update_check::query_latest(
+        config.dsh.pm,
+        &runtime.path_prefix(),
+        &runtime.augmented_path(),
+        &mirror.npm_env(),
+    )
+    .await
 }
 
-/// True when `program --version` exits successfully within 15s.
+/// True when `program --version` exits successfully within [`GLOBAL_CHECK_TIMEOUT`].
 ///
 /// Guards against STALE global shims whose launcher hardcodes an entry path
 /// from a package-manager global dir that no longer exists (MODULE_NOT_FOUND
@@ -413,10 +431,23 @@ async fn global_program_usable(program: &std::path::Path) -> bool {
     let mut c = Command::new(program);
     c.arg("--version");
     matches!(
-        tokio::time::timeout(std::time::Duration::from_secs(15), process::run_async(&mut c))
-            .await,
-        Ok(Ok(res)) if res.success()
+        process::run_bounded(&mut c, GLOBAL_CHECK_TIMEOUT).await,
+        Ok(res) if res.success()
     )
+}
+
+/// The spec a repair install should use.
+///
+/// A repair (broken tree, missing entry) must never DOWNGRADE: with
+/// `target == "latest"` — auto-update off, or the registry query failed — the
+/// unpinned spec would resolve to whatever the registry currently serves,
+/// which can be older than the copy being repaired. Pinning to the version
+/// already in the cache repairs the tree without moving it.
+fn repair_spec(cached: &Option<FullVersion>, target: &str, entry_ok: bool, spec: &str) -> String {
+    match (cached, target, entry_ok) {
+        (Some(v), "latest", false) => format!("@deepseek-ai/dsh@{v}"),
+        _ => spec.to_string(),
+    }
 }
 
 /// Build the command that will ultimately be spawned (managed) in Flow 5.
@@ -452,13 +483,21 @@ pub async fn run(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> R
     }
 
     // Resolve the target version: a pinned version, or the latest release
-    // (queried only when auto-update is on).
+    // (queried only when auto-update is on). When the inline query fails, reuse
+    // the background timer's last answer: a single 3-second timeout must not
+    // silently disable auto-update for a session that already knows it.
     let target = if !config.dsh.wants_latest() {
         config.dsh.version.clone()
     } else if config.dsh.auto_update {
-        match query_latest_version(config, mirror, runtime).await {
+        let queried = query_latest_version(config, mirror, runtime).await;
+        match queried.or_else(crate::update_check::recent_latest) {
             Some(latest) => latest.to_string(),
-            None => "latest".to_string(),
+            None => {
+                // Say it out loud: a failed query used to be invisible, so a
+                // dead mirror silently froze auto-update for the whole session.
+                progress::log(t!("flow.prepare.version_query_failed"));
+                "latest".to_string()
+            }
         }
     } else {
         "latest".to_string()
@@ -526,10 +565,20 @@ pub async fn run(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> R
         // its presence) whether an install/update is needed, then run
         // `node <package-bin-entry>`. The cache probe is logged either way,
         // so the timeline shows the full global → cache decision chain.
-        let cached = cached_dsh_version(&dsh_pkg_dir());
+        let pkg = dsh_pkg_dir();
+        let cached = cached_dsh_version(&pkg);
+        // A parseable manifest without a runnable entry means an interrupted
+        // install: without this check the launcher fails with `entry_missing`
+        // on every start until the cache is deleted by hand.
+        let entry_ok = package_entry(&pkg).is_some();
         let src = src_label(false);
-        if cache_needs_install(cached.as_ref(), &target) {
-            match cached {
+        // A pinned `version` is an explicit user request (downgrades
+        // included); a target derived from the registry's `latest` must never
+        // downgrade a newer cache copy.
+        let allow_downgrade = !config.dsh.wants_latest();
+        if cache_needs_install(cached.as_ref(), &target, allow_downgrade, entry_ok) {
+            match &cached {
+                _ if !entry_ok => progress::log(t!("flow.prepare.cache_repair")),
                 Some(v) => progress::log(t!(
                     "flow.prepare.version_mismatch",
                     source = src,
@@ -541,7 +590,16 @@ pub async fn run(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> R
                     source = t!("flow.prepare.src_cache")
                 )),
             }
-            install_dsh(config, mirror, runtime, &spec).await?;
+            install_dsh(
+                config,
+                mirror,
+                runtime,
+                &repair_spec(&cached, &target, entry_ok, &spec),
+            )
+            .await?;
+            // The published "有新版本" row is stale now: forget it instead of
+            // claiming an update is still pending until the next tick.
+            crate::update_check::invalidate();
         } else if let Some(v) = cached {
             // Cache hit: the installed copy already satisfies the target.
             progress::log(t!(
@@ -552,17 +610,16 @@ pub async fn run(config: &Config, mirror: &MirrorConfig, runtime: &Runtime) -> R
         }
         // Strict: after a successful install the entry must exist. A fallback
         // guess here would spawn `node <something wrong>` downstream.
-        let entry = package_entry(&dsh_pkg_dir()).ok_or_else(|| {
+        let entry = package_entry(&pkg).ok_or_else(|| {
             crate::error::Error(
                 t!(
                     "flow.prepare.entry_missing",
-                    dir = dsh_pkg_dir().display().to_string()
+                    dir = pkg.display().to_string()
                 )
                 .to_string(),
             )
         })?;
-        let node = platform::which_in("node", &runtime.path_prefix())
-            .unwrap_or_else(|| platform::tool("node"));
+        let node = platform::tool_in("node", &runtime.path_prefix());
         let mut c = Command::new(node);
         c.arg(entry);
         c.args(&flags);
@@ -610,6 +667,33 @@ mod tests {
             !global_program_usable(std::path::Path::new("Z:/definitely/not/a/real/dsh.exe")).await
         );
         let _ = ok;
+    }
+
+    /// A repair install must stay on the version already in the cache: an
+    /// unpinned spec (the `latest` target) would let a registry that moved
+    /// BACKWARDS downgrade the tree we are only trying to fix.
+    #[test]
+    fn repair_spec_never_downgrades() {
+        let cached = FullVersion::parse("0.1.6-alpha.2");
+        assert_eq!(
+            repair_spec(&cached, "latest", false, "@deepseek-ai/dsh"),
+            "@deepseek-ai/dsh@0.1.6-alpha.2"
+        );
+        // A healthy tree keeps whatever the normal decision produced.
+        assert_eq!(
+            repair_spec(&cached, "latest", true, "@deepseek-ai/dsh"),
+            "@deepseek-ai/dsh"
+        );
+        // A real target (pin, or a version learned from the registry) wins.
+        assert_eq!(
+            repair_spec(&cached, "0.2.0", false, "@deepseek-ai/dsh@0.2.0"),
+            "@deepseek-ai/dsh@0.2.0"
+        );
+        // Nothing cached: nothing to pin to.
+        assert_eq!(
+            repair_spec(&None, "latest", false, "@deepseek-ai/dsh"),
+            "@deepseek-ai/dsh"
+        );
     }
 
     #[test]
@@ -672,17 +756,91 @@ mod tests {
     fn cache_needs_install_by_version() {
         let v = |s: &str| FullVersion::parse(s);
         // Nothing usable in the cache: always install.
-        assert!(cache_needs_install(None, "latest"));
-        assert!(cache_needs_install(None, "0.1.1-rc.2"));
+        assert!(cache_needs_install(None, "latest", false, true));
+        assert!(cache_needs_install(None, "0.1.1-rc.2", false, true));
+        // A broken tree (parseable manifest, missing entry) is repaired
+        // whatever the target says — otherwise the launcher keeps failing with
+        // `entry_missing` on every launch.
+        assert!(cache_needs_install(
+            v("0.1.1-rc.2").as_ref(),
+            "latest",
+            false,
+            false
+        ));
+        assert!(cache_needs_install(
+            v("0.1.1-rc.2").as_ref(),
+            "0.1.1-rc.2",
+            false,
+            false
+        ));
         // Latest (update info unavailable): keep a usable cache entry.
-        assert!(!cache_needs_install(v("0.1.0-rc.6").as_ref(), "latest"));
-        assert!(!cache_needs_install(v("0.1.0-rc.6").as_ref(), ""));
+        assert!(!cache_needs_install(
+            v("0.1.0-rc.6").as_ref(),
+            "latest",
+            false,
+            true
+        ));
+        assert!(!cache_needs_install(
+            v("0.1.0-rc.6").as_ref(),
+            "",
+            false,
+            true
+        ));
         // Pinned target: exact match keeps, anything else refreshes.
-        assert!(!cache_needs_install(v("0.1.1-rc.2").as_ref(), "0.1.1-rc.2"));
-        assert!(cache_needs_install(v("0.1.0-rc.7").as_ref(), "0.1.1-rc.2"));
-        assert!(cache_needs_install(v("0.1.1-rc.1").as_ref(), "0.1.1-rc.2"));
+        assert!(!cache_needs_install(
+            v("0.1.1-rc.2").as_ref(),
+            "0.1.1-rc.2",
+            true,
+            true
+        ));
+        assert!(cache_needs_install(
+            v("0.1.0-rc.7").as_ref(),
+            "0.1.1-rc.2",
+            true,
+            true
+        ));
+        assert!(cache_needs_install(
+            v("0.1.1-rc.1").as_ref(),
+            "0.1.1-rc.2",
+            true,
+            true
+        ));
         // Unparseable request: don't churn the cache.
-        assert!(!cache_needs_install(v("0.1.0-rc.6").as_ref(), "garbage"));
+        assert!(!cache_needs_install(
+            v("0.1.0-rc.6").as_ref(),
+            "garbage",
+            false,
+            true
+        ));
+    }
+
+    /// The registry's `latest` dist-tag does move backwards (dsh's own went
+    /// from `0.1.6-alpha.2` back to `0.1.5-rc.2`). A newer cache copy must
+    /// survive that: re-installing it into a tree a running dsh executes from
+    /// is exactly where the "update is locked" reports came from. An explicit
+    /// pin still downgrades, and an older cache still updates.
+    #[test]
+    fn latest_never_downgrades_a_newer_cache() {
+        let newer = FullVersion::parse("0.1.6-alpha.2");
+        assert!(!cache_needs_install(
+            newer.as_ref(),
+            "0.1.5-rc.2",
+            false,
+            true
+        ));
+        assert!(cache_needs_install(
+            newer.as_ref(),
+            "0.1.5-rc.2",
+            true,
+            true
+        ));
+        let older = FullVersion::parse("0.1.4");
+        assert!(cache_needs_install(
+            older.as_ref(),
+            "0.1.5-rc.2",
+            false,
+            true
+        ));
     }
 
     #[test]

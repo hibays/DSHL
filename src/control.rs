@@ -3,10 +3,10 @@
 //!
 //! A small JSON-RPC-style endpoint — newline-delimited JSON over a loopback
 //! socket — that exposes the launcher's native capabilities (shutdown, profile
-//! switch, and later updates / window / terminal) to the supervised `dsh`
-//! process. The dsh-side Cordis plugin (`@dshl/control`) connects here and
-//! performs the same operations the Electron desktop shell provides, but
-//! against a running `dshl` instead of an embedded host.
+//! switch, window, terminal, restart and the dsh update check) to the
+//! supervised `dsh` process. The dsh-side Cordis plugin (`@dshl/control`)
+//! connects here and performs the same operations the Electron desktop shell
+//! provides, but against a running `dshl` instead of an embedded host.
 //!
 //! # Wire protocol
 //!
@@ -257,7 +257,7 @@ async fn dispatch(method: &str, params: Value) -> Result<Value, String> {
     match method {
         "ping" => Ok(json!({
             "pong": true,
-            "version": env!("CARGO_PKG_VERSION"),
+            "version": crate::version::BUILD_VERSION,
         })),
         "shutdown" => {
             crate::ui::request_shutdown();
@@ -291,6 +291,42 @@ async fn dispatch(method: &str, params: Value) -> Result<Value, String> {
             }
             Ok(json!({ "ok": true }))
         }
+        // Background update check (see [`crate::update_check`]):
+        // `update-status` reports the last result without touching the
+        // network, `check-update` runs a fresh query. Both answer within a
+        // sane budget: `check-update` is 3s (registry query) plus up to 15s
+        // when it must probe a global dsh shell — a caller that cannot wait
+        // that long should read `update-status` instead.
+        "update-status" => Ok(crate::update_check::status_json()),
+        "check-update" => {
+            crate::update_check::check_once().await;
+            Ok(crate::update_check::status_json())
+        }
+        // Launcher self-update (see [`crate::self_update`]): the same surface
+        // the startup page uses, so a dsh-side plugin can drive it too.
+        // `apply-self-update` is intentionally absent — the swap happens at
+        // the next start, where no live dsh exists to disturb.
+        "self-update-status" => Ok(crate::self_update::status_json()),
+        "check-self-update" => {
+            crate::self_update::check_once().await;
+            Ok(crate::self_update::status_json())
+        }
+        // The download is install-class (unbounded) while the pipe client
+        // gives up after 15s, so this answers IMMEDIATELY and the transfer
+        // finishes in the background — poll `self-update-status` for progress.
+        // The failure is logged (never swallowed) so the reason is visible in
+        // the launcher log even though the reply already went out.
+        "download-self-update" => {
+            crate::runtime::spawn(async {
+                if let Err(e) = crate::self_update::download_once().await {
+                    crate::progress::log(
+                        t!("self_update.download_failed", err = e.to_string()).to_string(),
+                    );
+                }
+            });
+            Ok(json!({ "ok": true, "started": true }))
+        }
+        "self-update-action" => Ok(crate::self_update::action()),
         _ => Err(format!("unknown method: {method}")),
     }
 }
@@ -514,6 +550,37 @@ mod tests {
                 "other".to_string()
             ]
         );
+    }
+
+    #[test]
+    fn update_status_dispatch_answers() {
+        // No check has run in this test process, so the answer is "not checked
+        // yet" — and, crucially, neither method may touch the network here
+        // (`check_once` returns immediately when no launch context was
+        // configured, which is the case in unit tests).
+        let status = crate::runtime::block_on(dispatch("update-status", json!({})))
+            .expect("update-status should succeed");
+        assert_eq!(status["checked"], false);
+        let checked = crate::runtime::block_on(dispatch("check-update", json!({})))
+            .expect("check-update should succeed");
+        assert_eq!(checked["checked"], false);
+    }
+
+    #[test]
+    fn self_update_dispatch_answers_without_network() {
+        // Same contract as above for the launcher's own update: no configured
+        // context ⇒ no query, and the status reports "not checked".
+        let status = crate::runtime::block_on(dispatch("self-update-status", json!({})))
+            .expect("self-update-status should succeed");
+        assert_eq!(status["checked"], false);
+        let checked = crate::runtime::block_on(dispatch("check-self-update", json!({})))
+            .expect("check-self-update should succeed");
+        assert_eq!(checked["checked"], false);
+        // The button action has nothing to do and must say so instead of
+        // pretending it opened something.
+        let action = crate::runtime::block_on(dispatch("self-update-action", json!({})))
+            .expect("self-update-action should succeed");
+        assert_eq!(action["ok"], false);
     }
 
     #[test]

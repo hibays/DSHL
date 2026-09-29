@@ -90,6 +90,21 @@ fn cancel_restart(_e: webui::Event) {
     state::CRASH_CANCELLED.store(true, std::sync::atomic::Ordering::SeqCst);
 }
 
+/// The footer's "更新启动器" button: download the newer launcher when there is
+/// one to download, otherwise open the release page (manual install).
+///
+/// Off the webui thread on purpose: opening a browser can block, and the
+/// download itself is install-class (unbounded). The 250 ms state poll shows
+/// the result; the click is the user's consent for the download.
+fn self_update_action(_e: webui::Event) {
+    std::thread::spawn(|| {
+        let result = crate::self_update::action();
+        if result.get("ok").and_then(|v| v.as_bool()) != Some(true) {
+            crate::debug::emit(&format!("self-update: action failed: {result}"));
+        }
+    });
+}
+
 /// Register all frontend bindings on a fresh window.
 pub(crate) fn register(window: &webui::Window) {
     window.bind("get_state", get_state);
@@ -99,4 +114,5 @@ pub(crate) fn register(window: &webui::Window) {
     window.bind("open_config", open_config);
     window.bind("restart_now", restart_now);
     window.bind("cancel_restart", cancel_restart);
+    window.bind("self_update_action", self_update_action);
 }

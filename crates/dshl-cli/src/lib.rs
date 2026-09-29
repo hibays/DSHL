@@ -42,6 +42,15 @@ pub use handle::RunHandle;
 pub use options::{RunOptions, RunOutcome};
 pub use run::{ensure_core_init, run_cli, run_with_options};
 
+/// Localized notice for the "another dshl is already running" CLI branch.
+///
+/// Lives here rather than in the binary shell so the shell needs no i18n
+/// plumbing of its own (it only prints the string), and so the wording stays
+/// identical for any other consumer of [`RunOutcome::AlreadyRunning`].
+pub fn already_running_notice() -> String {
+    dshl_core::i18n::translate("cli.already_running")
+}
+
 pub const USAGE: &str = "\
 DSHL — DeepSeek Harness web launcher
 

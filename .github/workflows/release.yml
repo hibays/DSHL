@@ -91,7 +91,13 @@ jobs:
 
       - name: Resolve version
         shell: bash
-        run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+        run: |
+          echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
+          # `build.rs` compiles this into the binary as the launcher's own
+          # version (`dshl --version`, the control-plane `ping`, and the
+          # self-update comparison). Without it a release would report the
+          # hand-edited Cargo.toml version and offer to "update" itself.
+          echo "DSHL_VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_ENV"
 
       - name: Build dshl binary
         run: cargo build --release --locked --target ${{ matrix.target }} -p dshl

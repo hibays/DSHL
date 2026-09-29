@@ -26,9 +26,15 @@ DSHL（DeepSeek Harness Launcher）——一个 webui.me 包装启动器：检�
 
 **启动管线**（`src/flow/`，顺序执行）：`system`（OS/arch 检测）→ `runtime_env`（node/bun/pnpm/fnm 探测与就绪）→ `mirror_check`（镜像策略解析）→ `prepare`（安装/解析 dsh，`prepare::run()` 返回 `Command`）→ `launch`（捕获 stdout 里的 URL 并转入监督）。
 
-**dsh 来源策略**（`src/config.rs` `DshMode`）：`global`（严格全局，缺失报错）/ `hybrid`（默认：全局优先，缺失或版本不符落缓存）/ `private`（恒装缓存、不碰全局）。缓存位置 `flow/prepare.rs::dsh_dir()` = `<cache>/dshl`，dsh 是其中的 node module（`node_modules/@deepseek-ai/dsh`），以 `node <bin 入口>` 直接运行（从 package.json 解析 bin）。包管理器可配 npm / bun / pnpm。
+**dsh 来源策略**（`src/config.rs` `DshMode`）：`global`（严格全局，缺失报错）/ `hybrid`（默认：全局优先，缺失或版本不符落缓存）/ `private`（恒装缓存、不碰全局）。缓存位置 `flow/prepare.rs::dsh_dir()` = `<cache>/dshl/dsh`，dsh 是其中的 node module（`node_modules/@deepseek-ai/dsh`），以 `node <bin 入口>` 直接运行（从 package.json 解析 bin）。包管理器可配 nub（默认）/ npm / bun / pnpm，一律经 `platform::tool_in(pm, &runtime.path_prefix())` 解析——工具可能在 dshl 缓存里而不在用户 PATH 上。
 
-**控制面**（`src/control.rs`）：`DSHL_CONTROL_URL=dshl://<token>@127.0.0.1:<port>` 注入 dsh 进程环境；方法 `ping | shutdown | switch-profile | open-terminal | restart`。插件轨 `open-terminal` 优先本地 addon、回落管道；restart/shutdown 对空 client 有防护。
+**更新检查**（`src/update_check.rs`）：后台任务每 2h 查一次 registry 的 `latest`（首次 5 分钟后；查询 3s 有界、全局壳探测 15s 有界），结果写进 `progress::State::update` + 控制面 `update-status` / `check-update`。**只检查不安装**——安装会重写运行中 dsh 所执行的缓存；安装仍然只在 `flow::prepare` 里做。它同时是启动路径的兜底：启动时那次查询若失败，`recent_latest()`（6h TTL）提供上次已知的最新版本。
+
+**启动器自更新**（`src/self_update.rs`，配置 `[update]`）：默认 `self = "notify"`，每 `interval-hours`（默认 6）查一次 GitHub Releases（`hibays/DSHL`，经 `mirrors.github`），用户点「更新启动器」后下载**并用 release 公布的 sha256 校验**（无 digest 即拒绝自动安装），暂存到 `<cache>/dshl/update/`；**替换发生在 `run_cli` 的单实例锁之后、任何子进程之前**（`apply_staged`），因此永不打断运行中的 dsh，新二进制在下次启动接管。热替换（保 dsh 存活）的完整机制与取舍见 `.agents/notes/proposed/architecture/2026-09-22-dshl-hot-self-update.md`——未实现，勿当作疏漏去补。
+
+**版本来源**（`build.rs` + `src/version.rs::BUILD_VERSION`）：对外版本一律取构建期注入的 `DSHL_BUILD_VERSION`（CI 用 tag 的 `DSHL_VERSION`，本地用 `git describe --tags` 兜底，都没有时退 `CARGO_PKG_VERSION`）。**不要再直接用 `env!("CARGO_PKG_VERSION")` 做用户可见或与发布版本比较的事**——它手改且会与 tag 漂移（v0.2.22 的产物曾报 0.2.0）。
+
+**控制面**（`src/control.rs`）：`DSHL_CONTROL_URL=dshl://<token>@127.0.0.1:<port>` 注入 dsh 进程环境；方法 `ping | shutdown | switch-profile | open-terminal | restart | update-status | check-update | self-update-status | check-self-update | download-self-update | self-update-action`。插件轨 `open-terminal` 优先本地 addon、回落管道；restart/shutdown 对空 client 有防护。
 
 **进程监督**（`src/process/`）：dsh 是受监督子进程，stdout/stderr 逐行进 `<cache>/dshl/dsh.log`；优雅停止（Windows 隐藏控制台 + `GenerateConsoleCtrlEvent` 发 Ctrl+C，Unix SIGTERM），**从不自动强杀**；强杀由 Job Object / PDEATHSIG 兜底。崩溃恢复：5s 倒计时自动重启。
 
@@ -98,8 +104,10 @@ scripts/publish.ps1|publish.sh -Version x.y.z [-DryRun]  # Track B npm 发布（
 ## Important Files
 
 - `src/lib.rs` — crate 模块地图、i18n 装载、`DSH_CHILD` 全局态。
-- `src/config.rs` — `Config` / `MirrorMode(off|on|force)` / `DshMode(global|hybrid|private)` / `Pm(npm|bun|pnpm)` / `Ui`；配置面见 `dshl.example.toml`（每字段可选、每次启动重读）。
-- `src/flow/prepare.rs` — `dsh_dir()` / `install_dsh()` / 版本匹配与更新决策（dsh 缓存布局的事实来源）。
+- `src/config.rs` — `Config` / `MirrorMode(off|on|force)` / `DshMode(global|hybrid|private)` / `Pm(nub|npm|bun|pnpm)` / `Ui`；配置面见 `dshl.example.toml`（每字段可选、每次启动重读）。
+- `src/flow/prepare.rs` — `dsh_dir()` / `install_dsh()` / 版本匹配与更新决策（dsh 缓存布局的事实来源；缓存判定 = 版本 + 入口可用性，`latest` 派生目标不降级）。
+- `src/update_check.rs` — 后台 2h 更新检查（只检查不安装）、`query_latest()` 单一实现、`recent_latest()` 启动兜底、`invalidate()`（安装后清状态）。
+- `src/self_update.rs` + `build.rs` — 启动器自更新（检查/下载/sha256 校验/暂存/下次启动替换）与构建期版本注入（`version::BUILD_VERSION`）。
 - `src/control.rs` — 控制面协议与分发（含大部分单元测试）。
 - `src/runtime.rs`、`src/error.rs`、`src/i18n.rs` — 三大横切基础设施（异步、错误、本地化）。
 - `Cargo.toml`（workspace 根：members、依赖、feature、release profile）、`crates/*/Cargo.toml`。

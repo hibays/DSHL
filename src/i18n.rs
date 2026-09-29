@@ -24,6 +24,16 @@ pub fn locale() -> &'static str {
     LOCALE.get_or_init(detect)
 }
 
+/// Translate a key at runtime.
+///
+/// Wrapper for callers that cannot use the `t!` macro directly (the `dshl`
+/// binary shell prints a CLI notice through `dshl-cli`, which does not enable
+/// the macro). [`init`] runs at the top of every entry point, so the locale is
+/// already resolved by the time this is called.
+pub fn translate(key: &str) -> String {
+    t!(key).to_string()
+}
+
 /// Map the OS UI language to one of the shipped locales.
 fn detect() -> &'static str {
     let sys = sys_locale::get_locale().unwrap_or_default();

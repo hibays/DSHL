@@ -65,6 +65,15 @@ pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Launch> {
     run_step!("system", system::run());
     let runtime = run_step!("runtime", runtime_env::run(config, mirror));
     run_step!("mirror", mirror_check::run(mirror));
+
+    // Hand the background timers the same snapshot the pipeline is about to
+    // use (and start them — idempotent). Both are check-only: installing dsh
+    // stays here, where the cache is known to be quiescent, and a launcher
+    // update is only ever swapped in before any child exists (see
+    // `crate::self_update`).
+    crate::update_check::configure(config, mirror, &runtime);
+    crate::self_update::configure(config, mirror);
+
     let command = run_step!("dsh", prepare::run(config, mirror, &runtime));
 
     // The launch step MUST go through `run_step!` like every other step: its

@@ -10,7 +10,7 @@ use super::assets;
 /// The page-facing translation keys the frontend reads via `tr()` and
 /// `data-i18n`. Single source of truth is the locale YAML; this lists the
 /// subset the JS bundle uses so `/i18n.js` stays small.
-const PAGE_KEYS: [&str; 23] = [
+const PAGE_KEYS: [&str; 24] = [
     "page.title",
     "page.heading.steps",
     "page.heading.config",
@@ -21,6 +21,7 @@ const PAGE_KEYS: [&str; 23] = [
     "page.btn.force_kill",
     "page.btn.retry",
     "page.btn.open_config",
+    "page.btn.self_update",
     "page.btn.exit",
     "page.status.pending",
     "page.status.running",

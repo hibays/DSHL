@@ -6,6 +6,15 @@
 use std::cmp::Ordering;
 use std::fmt;
 
+/// The launcher's own version, pinned at build time by `build.rs`.
+///
+/// Use this — not `env!("CARGO_PKG_VERSION")` — for anything user-visible or
+/// compared against a published release: `CARGO_PKG_VERSION` is hand-edited in
+/// `Cargo.toml` and had drifted from the release tag (v0.2.22 artifacts
+/// answered `0.2.0`), which would make a self-update check offer the release
+/// the launcher is already running.
+pub const BUILD_VERSION: &str = env!("DSHL_BUILD_VERSION");
+
 /// A `major.minor.patch` version tuple.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Version {

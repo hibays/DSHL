@@ -108,12 +108,12 @@ pub fn run_cli() -> Result<std::result::Result<(), RunOutcome>> {
 
     apply_run_options(&cli);
 
-    if cli.enable_single_instance
-        && config::load(cli.config.as_deref())
-            .config
-            .ui
-            .single_instance
-    {
+    // Load the config once: the single-instance gate and the self-update
+    // switch both need it, and re-reading the file in between could see a
+    // different state than the one we just acted on.
+    let config = config::load(cli.config.as_deref()).config;
+
+    if cli.enable_single_instance && config.ui.single_instance {
         if let Some(lock) = dshl_core::platform::single_instance::acquire() {
             // Hold the single-instance lock handle alive for the whole run.
             std::mem::forget(lock);
@@ -123,6 +123,20 @@ pub fn run_cli() -> Result<std::result::Result<(), RunOutcome>> {
             std::thread::sleep(std::time::Duration::from_millis(500));
             return Ok(Err(RunOutcome::AlreadyRunning));
         }
+    }
+
+    // A staged launcher update is swapped in HERE: after the single-instance
+    // lock (no other launcher is mid-flight) and before any child process
+    // exists (nothing can be disturbed — a live dsh owns job-object /
+    // PDEATHSIG ties to this process, so the swap must never happen later).
+    // The running process keeps executing the old code; the new binary takes
+    // over at the next start, which the published status says explicitly.
+    // `[update] self = "off"` leaves a downloaded artifact untouched.
+    let self_update_enabled = config.update.self_update != dshl_core::config::SelfUpdateMode::Off;
+    if let Some(version) = dshl_core::self_update::apply_staged(self_update_enabled) {
+        dshl_core::debug::emit(&format!(
+            "self-update: {version} applied on disk; effective on the next start"
+        ));
     }
 
     if cli.install_signal_handler {

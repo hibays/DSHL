@@ -147,7 +147,7 @@ pub async fn run(config: &Config, mirror: &MirrorConfig) -> Result<Runtime> {
     let node_dir = node_dir.expect("node dir resolved above");
 
     // Bun only when the config asks for it.
-    let bun_dir = install::ensure_bun(config, mirror).await?;
+    let bun_dir = install::ensure_bun(config, mirror, &node_dir).await?;
 
     // pnpm only when the config asks for it (pm=pnpm). The returned dirs are
     // where pnpm lives — prepend them to PATH so a freshly installed pnpm is

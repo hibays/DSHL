@@ -25,5 +25,5 @@ mod win_job;
 #[cfg(target_os = "windows")]
 mod win_proc;
 
-pub use capture::{CommandResult, run, run_async, with_env};
+pub use capture::{CommandResult, run, run_async, run_bounded, with_env};
 pub use child::{AsyncChild, Output};

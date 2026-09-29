@@ -38,6 +38,46 @@ pub struct CrashState {
     pub countdown: u8,
 }
 
+/// Result of the background update check (see [`crate::update_check`]).
+///
+/// `text` is the localized one-liner the page renders as a config row value,
+/// so the frontend never has to assemble version strings itself.
+#[derive(Debug, Clone, Serialize)]
+pub struct UpdateInfo {
+    pub latest: String,
+    pub current: Option<String>,
+    /// The registry's `latest` is newer than the installed copy.
+    pub available: bool,
+    /// The installed copy is newer than the registry's `latest` (a dist-tag
+    /// moved backwards) — never reported as an update.
+    pub ahead: bool,
+    /// Unix seconds of the check that produced this entry.
+    pub checked_at: u64,
+    pub text: String,
+}
+
+/// Result of the launcher's OWN update check / staging
+/// (see [`crate::self_update`]).
+///
+/// `text` is the localized one-liner the page renders as a config row value;
+/// the frontend never assembles version strings itself.
+#[derive(Debug, Clone, Serialize)]
+pub struct SelfUpdateInfo {
+    pub current: String,
+    pub latest: Option<String>,
+    /// A newer launcher exists (whether or not it is downloaded yet).
+    pub available: bool,
+    /// The archive is on disk and will be applied at the next start.
+    pub staged: bool,
+    /// Swapped in during this run — effective after a restart.
+    pub applied: Option<String>,
+    /// Release page, for the manual route.
+    pub url: Option<String>,
+    /// Unix seconds of the check that produced this entry.
+    pub checked_at: u64,
+    pub text: String,
+}
+
 /// Full UI snapshot.
 #[derive(Debug, Clone, Serialize)]
 pub struct State {
@@ -52,6 +92,10 @@ pub struct State {
     pub stale_pid: Option<u32>,
     /// Crash-recovery banner (dsh exited unexpectedly, auto-restart pending).
     pub crash: Option<CrashState>,
+    /// Latest background update-check result (`None` before the first check).
+    pub update: Option<UpdateInfo>,
+    /// Launcher self-update state (`None` until a check ran or one is staged).
+    pub self_update: Option<SelfUpdateInfo>,
 }
 
 impl Default for State {
@@ -66,6 +110,8 @@ impl Default for State {
             config_error: None,
             stale_pid: None,
             crash: None,
+            update: None,
+            self_update: None,
         }
     }
 }
@@ -151,6 +197,21 @@ pub fn set_crash_countdown(countdown: Option<u8>) {
             state.crash = None;
         }
     }
+}
+
+/// Publish the latest background update-check result.
+///
+/// Deliberately NOT cleared by [`reset`]: it is a session-level fact with a
+/// 2-hour cadence, so clearing it on every relaunch would blank the row until
+/// the next tick.
+pub fn set_update(info: Option<UpdateInfo>) {
+    STATE.lock().unwrap().update = info;
+}
+
+/// Publish the launcher's own update state (also survives [`reset`], so a
+/// staged/applied update stays visible across a relaunch).
+pub fn set_self_update(info: Option<SelfUpdateInfo>) {
+    STATE.lock().unwrap().self_update = info;
 }
 
 pub fn clear_error() {

@@ -21,7 +21,7 @@ fn main() {
                 0
             }
             dshl_cli::RunOutcome::VersionPrinted => {
-                println!("dshl {}", env!("CARGO_PKG_VERSION"));
+                println!("dshl {}", dshl_core::version::BUILD_VERSION);
                 0
             }
             dshl_cli::RunOutcome::ArgsError(msg) => {
@@ -30,7 +30,14 @@ fn main() {
             }
             dshl_cli::RunOutcome::AlreadyRunning => {
                 // Single-instance: we already notified the other instance and
-                // waited for it to foreground itself. Exit cleanly.
+                // waited for it to foreground itself. Exit cleanly — but SAY SO:
+                // a silent exit reads as "the launcher is stuck / locked", and
+                // the user cannot tell whether the second launch did anything.
+                //
+                // NOTE: release builds are GUI-subsystem, so this reaches the
+                // caller only where the handles are inherited or redirected
+                // (a console run, a script, `--debug` builds).
+                eprintln!("{}", dshl_cli::already_running_notice());
                 0
             }
         }),

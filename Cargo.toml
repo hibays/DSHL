@@ -2,6 +2,10 @@
 name = "dshl-core"
 version.workspace = true
 edition.workspace = true
+# Explicit so the version-pinning build script can never be left behind by a
+# packaging step that only ships tracked files (it defines the
+# `DSHL_BUILD_VERSION` env var that `src/version.rs` compiles in).
+build = "build.rs"
 description = "DeepSeek Harness web launcher core — a webui.me wrapper that checks the runtime, installs dsh if needed, boots `dsh web`, and routes the browser to it."
 license.workspace = true
 readme.workspace = true
@@ -18,7 +22,7 @@ version = "0.2.0"
 edition = "2024"
 license = "MIT"
 readme = "README.md"
-repository = "https://github.com/hibays/dsh-launcher"
+repository = "https://github.com/hibays/DSHL"
 keywords = ["deepseek", "harness", "webui", "launcher", "dsh"]
 categories = ["command-line-utilities", "web-programming"]
 

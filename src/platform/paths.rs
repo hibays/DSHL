@@ -81,13 +81,32 @@ pub fn with_ext(name: &str) -> String {
 /// `CreateProcess` only auto-finds `.exe`, so they must be resolved to their
 /// `.cmd` path. Returns the full path when found, else the name (+ `.cmd`).
 pub fn tool(name: &str) -> PathBuf {
-    which(name).unwrap_or_else(|| {
-        if cfg!(target_os = "windows") {
-            PathBuf::from(format!("{name}.cmd"))
-        } else {
-            PathBuf::from(name)
-        }
-    })
+    which(name).unwrap_or_else(|| bare_tool(name))
+}
+
+/// Like [`tool`], but searches `extra_dirs` first (the runtime prefix: fnm's
+/// node bin, dshl's cached bun/pnpm/nub, …).
+///
+/// This is the variant to use for every tool dshl may have installed itself.
+/// [`tool`] only sees the ambient `PATH` plus [`known_tool_dirs`], so a tool
+/// that lives exclusively in dshl's cache (`<cache>/dshl/nub/bin/nub.exe`,
+/// `<cache>/dshl/pnpm/node_modules/.bin/pnpm.cmd`, …) falls through to
+/// [`bare_tool`] — and on Windows that spelling (`nub.cmd`) does not exist for
+/// a native executable, so the spawn failed with "program not found" even
+/// though the binary sat in the runtime prefix.
+pub fn tool_in(name: &str, extra_dirs: &[PathBuf]) -> PathBuf {
+    which_in(name, extra_dirs).unwrap_or_else(|| bare_tool(name))
+}
+
+/// Last-resort spelling of a tool that could not be resolved to a path: the
+/// child's `PATH` still gets a chance at spawn time, and Node tools on Windows
+/// need the `.cmd` suffix to be found by `CreateProcess`.
+fn bare_tool(name: &str) -> PathBuf {
+    if cfg!(target_os = "windows") {
+        PathBuf::from(format!("{name}.cmd"))
+    } else {
+        PathBuf::from(name)
+    }
 }
 
 /// Locate an executable by name on `extra_dirs` first, then `PATH` plus the

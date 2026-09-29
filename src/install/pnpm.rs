@@ -16,6 +16,7 @@ use crate::probe;
 use crate::process;
 use crate::progress;
 
+use super::bin_in_dir;
 use super::runtime::Runtime;
 use super::stream::run_streaming;
 
@@ -52,7 +53,7 @@ pub async fn ensure_pnpm(
         }
         return Ok(pnpm_bin_dirs(node_dir).await);
     }
-    if cached_bin.join(platform::with_ext("pnpm")).is_file() {
+    if bin_in_dir(&cached_bin, "pnpm") {
         progress::log(t!("install.pnpm.cached", dir = cached_bin.display()));
         return Ok(vec![cached_bin]);
     }
@@ -60,9 +61,11 @@ pub async fn ensure_pnpm(
     progress::log(t!("install.pnpm.not_found"));
     // Install pnpm into dshl's cache (never `-g`). The npm of a freshly
     // installed fnm node lives in `node_dir`, which is not on the ambient
-    // PATH — augment it so the install works.
+    // PATH — resolve it through that dir and augment the child PATH so both
+    // the lookup and the install work.
     std::fs::create_dir_all(&prefix).ok();
-    let mut cmd = Command::new(platform::tool("npm"));
+    let node_dirs = [node_dir.to_path_buf()];
+    let mut cmd = Command::new(platform::tool_in("npm", &node_dirs));
     cmd.args(["install", "--prefix"]);
     cmd.arg(&prefix);
     cmd.args(["--no-save", "pnpm"]);
@@ -75,7 +78,7 @@ pub async fn ensure_pnpm(
     process::with_env(&mut cmd, &mirror.npm_env());
     run_streaming(cmd, "install pnpm").await?;
 
-    if cached_bin.join(platform::with_ext("pnpm")).is_file() {
+    if bin_in_dir(&cached_bin, "pnpm") {
         return Ok(vec![cached_bin]);
     }
     // Fall back to global-bin resolution so a pnpm that npm placed elsewhere
@@ -90,7 +93,11 @@ pub async fn ensure_pnpm(
 /// configured path. Fallback chain: printed line → path quoted in the error
 /// → platform default. Directories that do not exist yet are created so a
 /// freshly installed pnpm is findable right after the first `add -g`.
+///
+/// The query is bounded (probe class: a wedged pnpm must not stall startup)
+/// and the timeout falls through to the platform defaults.
 async fn pnpm_bin_dirs(node_dir: &Path) -> Vec<PathBuf> {
+    const QUERY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(15);
     let rt = Runtime {
         node_dir: Some(node_dir.to_path_buf()),
         bun_dir: None,
@@ -99,7 +106,7 @@ async fn pnpm_bin_dirs(node_dir: &Path) -> Vec<PathBuf> {
     let mut cmd = Command::new(platform::tool("pnpm"));
     cmd.args(["bin", "-g"]);
     cmd.env("PATH", rt.augmented_path());
-    let text = process::run_async(&mut cmd)
+    let text = process::run_bounded(&mut cmd, QUERY_TIMEOUT)
         .await
         .map(|res| format!("{}{}", res.stdout, res.stderr))
         .unwrap_or_default();

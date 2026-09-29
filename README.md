@@ -57,7 +57,9 @@ DSHL 是一个轻量的原生启动器（Rust），以 [webui.me](https://webui.
   以静态资源形式随 `@dshl/control` 分发（白名单路由，不依赖 CDN）。见
   `src/pty/`（`spawn/list/resize/write/kill/server_endpoint`）。
 - **控制面（control plane）** — 启动器开一个回环 TCP 上的 NDJSON JSON-RPC 端点，
-  把原生能力（shutdown/restart/switch-profile/open-terminal/ping）暴露给被监督的
+  把原生能力（shutdown/restart/switch-profile/open-terminal/ping，以及
+update-status/check-update/self-update-status/check-self-update/download-self-update/self-update-action）
+暴露给被监督的
   dsh 进程；每次启动生成随机令牌并经 `DSHL_CONTROL_URL` 环境变量下发。见下文
   「控制面」。
 - **窗口几何记忆** — 一个 `<cache>/dshl/window-state.json` 记录 `{x,y,width,height}`
@@ -250,7 +252,7 @@ github         = "https://gh-proxy.org/"             # 模板默认前缀；空 
 [dsh]
 flags       = "--profile web --host 127.0.0.1 --port 0"
 mode        = "hybrid"    # global | hybrid | private
-pm          = "bun"       # npm | bun | pnpm
+pm          = "nub"       # nub（默认）| npm | bun | pnpm
 version     = "latest"    # "latest" = 无后缀，否则 @deepseek-ai/dsh@<version>
 auto-update = true        # 自动更新 @deepseek-ai/dsh
 single-instance = false   # true = 检测到其他 dsh 实例在运行时拒绝启动（防双写）
@@ -281,12 +283,38 @@ dsh 的来源：
 `@deepseek-ai/dsh` 保持最新：
 
 - 在 `hybrid`/`private` 模式下，每次启动查询 registry 的最新版本，若缓存副本
-  更旧则重装（最多 5 秒；离线时静默跳过）。`hybrid` 模式下仅当全局 dsh 已是最新
-  时才使用它。
+  更旧则重装（查询最多 3 秒；离线时沿用已安装版本并如实记一行日志）。
+  `hybrid` 模式下仅当全局 dsh 已是最新时才使用它。
+- 目标版本只向前：registry 的 `latest` 标签若回退到更旧的版本（dsh 发生过：
+  `0.1.6-alpha.2` → `0.1.5-rc.2`），启动器**不会**把更新的缓存降级，除非你在
+  `version` 里显式固定到那个版本。
+- 缓存不完整（清单在、入口缺失，通常是上次安装被中断）时会自动重装修复，而不是
+  每次都报同一个错。
 - `global` 模式不受 auto-update 影响——全局安装归你自己管理。
 
-`auto-update = false` 时，启动器仅在 dsh 缺失时安装，之后不再更新。锁定的
-`version`（如 `1.2.3`）始终优先，不受 `auto-update` 影响。
+**后台定时检查**：启动器还会在 Rust 侧每 **2 小时**查询一次 registry（首次在启动
+5 分钟后），把结果写进启动页的配置表（`update` 一行）与日志，并通过控制面
+`update-status` / `check-update` 暴露给 dsh 内的插件。它**只检查、不安装**——
+安装会把文件写进正在运行的 dsh 所执行的目录（Windows 上会失败），所以更新仍然
+只在启动管线里做；后台检查的作用是让你随时知道有没有新版本，并在启动时那次 3 秒
+查询失败时提供上次已知的最新版本作为兜底。
+
+`auto-update = false` 时，启动器仅在 dsh 缺失时安装，之后不再更新（后台检查照常
+报告，不会安装）。锁定的 `version`（如 `1.2.3`）始终优先，不受 `auto-update` 影响。
+
+### 启动器自身的更新（`[update]`）
+
+`self`（默认 `notify`）：`off` = 不检查；`notify` = 检查并提示，点「更新启动器」才下载；
+`auto` = 自动下载。`interval-hours`（默认 6，0 = 关掉定时器）控制后台检查节奏。
+更新源是 GitHub Releases（经 `mirrors.github` 前缀），下载后**用 release 公布的 sha256 校验**，
+无校验值就拒绝自动安装（改走"打开下载页手动装"）。
+
+**应用时机是刻意的**：替换发生在启动器**下次启动的最开始**（单实例锁之后、任何子进程之前），
+所以它**永不打断正在运行的 dsh**——下载完的状态是"已下载，下次启动应用"，重启 dshl 后即生效。
+把启动器进程本身在 dsh 存活时换掉需要交接 Job Object / PDEATHSIG、保持控制端点的 port+token、
+把 dsh 的输出从管道改成文件才能重新收养（tokio 无法收养非亲生子进程），
+完整设计与取舍见 `.agents/notes/proposed/architecture/2026-09-22-dshl-hot-self-update.md`；
+`macOS` 的 `.app` 包与 cargo 构建树（`target/debug|release`）不做自动替换，只给下载页。
 
 ### 单实例（dsh 本身，可选）
 

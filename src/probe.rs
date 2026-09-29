@@ -2,10 +2,20 @@
 
 use std::path::PathBuf;
 use std::process::Command;
+use std::time::Duration;
 
 use crate::platform;
 use crate::process;
 use crate::version::Version;
+
+/// Hard ceiling for a `--version` probe.
+///
+/// Probe/verification subprocesses are bounded by policy (installs and
+/// downloads deliberately are not). Without it a tool that never answers —
+/// a wedged shim, a network-mounted binary — stalled the whole startup
+/// pipeline, and the 2h update check would accumulate stuck children; the
+/// child is killed when the budget expires (see [`process::run_bounded`]).
+const PROBE_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// A detected tool.
 #[derive(Debug, Clone)]
@@ -54,7 +64,7 @@ async fn probe_cmd_in(name: &'static str, version_args: &[&str], extra_dirs: &[P
     };
     let mut cmd = Command::new(&path);
     cmd.args(version_args);
-    match process::run_async(&mut cmd).await {
+    match process::run_bounded(&mut cmd, PROBE_TIMEOUT).await {
         Ok(res) => tool_from_result(
             name,
             path,
@@ -62,6 +72,7 @@ async fn probe_cmd_in(name: &'static str, version_args: &[&str], extra_dirs: &[P
             res.stdout.trim().to_string(),
             res.stderr.trim().to_string(),
         ),
+        // Spawn failure or timeout: the binary exists but is not usable.
         Err(_) => Tool {
             name,
             found: true,
@@ -145,11 +156,18 @@ pub async fn nvm() -> Tool {
         };
         let mut cmd = Command::new(&path);
         cmd.arg("version");
-        return match process::run_async(&mut cmd).await {
-            Ok(res) => {
-                let raw = res.stdout.trim().to_string();
-                Tool::found("nvm", path, raw)
-            }
+        // Same exit-status gate as every other probe: nvm-windows answers
+        // `nvm version` on stdout, but a NON-ZERO exit means the shell is
+        // broken and its output must not be mined for a version (this branch
+        // used to bypass `tool_from_result` and did exactly that).
+        return match process::run_bounded(&mut cmd, PROBE_TIMEOUT).await {
+            Ok(res) => tool_from_result(
+                "nvm",
+                path,
+                res.success(),
+                res.stdout.trim().to_string(),
+                String::new(),
+            ),
             Err(_) => Tool {
                 name: "nvm",
                 found: true,
