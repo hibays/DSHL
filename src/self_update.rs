@@ -863,20 +863,26 @@ mod tests {
 
     #[test]
     fn picks_the_portable_archive_for_this_platform() {
-        let release = release_from_json(&release_payload()).expect("release parses");
-        assert_eq!(release.version.to_string(), "0.2.22");
         // The canned payload only carries assets for two platforms; on any
-        // other host the picker must simply find nothing.
+        // other host the picker must simply find nothing (`windows-aarch64`
+        // is a real case: the ARM runner has no asset in this fixture).
+        let parsed = release_from_json(&release_payload());
         match platform_key() {
             "windows-x86_64" => {
+                let release = parsed.expect("windows archive parses");
+                assert_eq!(release.version.to_string(), "0.2.22");
                 assert_eq!(release.url, "https://example/win.zip");
                 assert_eq!(
                     release.sha256.as_deref(),
                     Some("897daa69859b606da6145147f32dd2487d56401aa021f58352317ab6bc1d5b5e")
                 );
             }
-            "linux-x86_64" => assert_eq!(release.url, "https://example/linux.zip"),
-            _ => assert!(release_from_json(&release_payload()).is_none()),
+            "linux-x86_64" => {
+                let release = parsed.expect("linux archive parses");
+                assert_eq!(release.version.to_string(), "0.2.22");
+                assert_eq!(release.url, "https://example/linux.zip");
+            }
+            _ => assert!(parsed.is_none()),
         }
     }
 
@@ -929,13 +935,19 @@ mod tests {
         )));
         assert!(!inside_app_bundle(Path::new("/usr/local/bin/dshl")));
         // A cargo build tree must never be replaced by a released binary.
-        assert!(is_dev_path(Path::new(r"G:\p\target\debug\dshl.exe")));
+        // Unix spelling on every host: a Windows-spelled path is a SINGLE
+        // component on Unix, so `is_dev_path` answers false there for a reason
+        // that has nothing to do with the rule under test.
         assert!(is_dev_path(Path::new("/p/target/release/dshl")));
         assert!(is_dev_path(Path::new(
             "/p/target/debug/deps/dshl_core-1.exe"
         )));
-        assert!(!is_dev_path(Path::new(r"C:\Program Files\dshl\dshl.exe")));
         assert!(!is_dev_path(Path::new("/usr/local/bin/dshl")));
+        #[cfg(windows)]
+        {
+            assert!(is_dev_path(Path::new(r"G:\p\target\debug\dshl.exe")));
+            assert!(!is_dev_path(Path::new(r"C:\Program Files\dshl\dshl.exe")));
+        }
     }
 
     /// The marker is data from a user-writable cache: it must not be able to
